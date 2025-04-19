@@ -53,7 +53,11 @@ func New(ifaceName string) (Collector, error) {
 
 	// Load the eBPF program from the object file.
 	// Project root is the directory containing the executable.
-	obj := filepath.Join(utility.GetProjectRoot(), "xdpcollector", "xdp_prog.o")
+	projectRoot, err := utility.GetProjectRoot()
+	if err != nil {
+		return nil, fmt.Errorf("get project root: %w", err)
+	}
+	obj := filepath.Join(projectRoot, "xdpcollector", "xdp_prog.o")
 	spec, err := ebpf.LoadCollectionSpec(obj)
 	if err != nil {
 		return nil, fmt.Errorf("load spec: %w", err)
