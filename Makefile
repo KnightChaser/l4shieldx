@@ -1,5 +1,5 @@
 CLANG ?= clang
-BPF_OBJ = xdp_prog.o
+BPF_OBJ = bpf/xdp_prog.o
 
 all: $(BPF_OBJ)
 

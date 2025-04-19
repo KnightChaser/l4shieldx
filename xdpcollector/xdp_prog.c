@@ -1,4 +1,4 @@
-// bpf/xdp_prog.c
+// xdp_prog/xdp_prog.c
 // go:build ignore
 #include "if_ether.h"
 #include "vmlinux.h"
