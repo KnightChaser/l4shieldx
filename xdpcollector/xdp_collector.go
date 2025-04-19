@@ -143,7 +143,7 @@ func (c *collector) consume(ctx context.Context) error {
 
 		timestamp := utility.ConvertBpfNanotime(ev.Ts)
 		fmt.Printf("[TCP] %s:%d → %s:%d at %s\n",
-			intToIPv4(ev.Saddr), ev.Sport, intToIPv4(ev.Daddr), ev.Dport, timestamp)
+			utility.IntToIPv4(ev.Saddr), ev.Sport, utility.IntToIPv4(ev.Daddr), ev.Dport, timestamp)
 	}
 }
 
@@ -157,13 +157,6 @@ func (c *collector) Close() {
 	if c.coll != nil {
 		c.coll.Close()
 	}
-}
-
-// TODO: Move this to a common package later.
-func intToIPv4(i uint32) string {
-	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, i)
-	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
 }
 
 // Project root is the directory containing the executable.
