@@ -1,1 +1,3 @@
 vmlinux.h
+xdp_prog.o
+l4shieldx
