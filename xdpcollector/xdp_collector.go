@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"l4shieldx/xdpcollector/utility"
+
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -139,8 +141,9 @@ func (c *collector) consume(ctx context.Context) error {
 			continue
 		}
 
-		fmt.Printf("[TCP] %s:%d → %s:%d at %d ns\n",
-			intToIPv4(ev.Saddr), ev.Sport, intToIPv4(ev.Daddr), ev.Dport, ev.Ts)
+		timestamp := utility.ConvertBpfNanotime(ev.Ts)
+		fmt.Printf("[TCP] %s:%d → %s:%d at %s\n",
+			intToIPv4(ev.Saddr), ev.Sport, intToIPv4(ev.Daddr), ev.Dport, timestamp)
 	}
 }
 
