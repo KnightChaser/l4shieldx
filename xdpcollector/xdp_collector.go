@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"path/filepath"
 
 	"l4shieldx/xdpcollector/utility"
@@ -53,7 +52,8 @@ func New(ifaceName string) (Collector, error) {
 	}
 
 	// Load the eBPF program from the object file.
-	obj := filepath.Join(projectRoot(), "xdpcollector", "xdp_prog.o")
+	// Project root is the directory containing the executable.
+	obj := filepath.Join(utility.GetProjectRoot(), "xdpcollector", "xdp_prog.o")
 	spec, err := ebpf.LoadCollectionSpec(obj)
 	if err != nil {
 		return nil, fmt.Errorf("load spec: %w", err)
@@ -157,10 +157,4 @@ func (c *collector) Close() {
 	if c.coll != nil {
 		c.coll.Close()
 	}
-}
-
-// Project root is the directory containing the executable.
-func projectRoot() string {
-	exe, _ := os.Executable()
-	return filepath.Dir(exe)
 }
