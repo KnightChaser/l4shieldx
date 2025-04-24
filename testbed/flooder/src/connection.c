@@ -9,6 +9,23 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+// (Utility) Obtain the random seed from /dev/urandom
+static unsigned int get_random_seed() {
+    unsigned int seed;
+    FILE *fp = fopen("/dev/urandom", "rb");
+    if (fp == NULL) {
+        perror("Failed to open /dev/urandom");
+        exit(EXIT_FAILURE);
+    }
+    if (fread(&seed, sizeof(seed), 1, fp) != 1) {
+        perror("Failed to read random seed");
+        fclose(fp);
+        exit(EXIT_FAILURE);
+    }
+    fclose(fp);
+    return seed;
+}
+
 // (Utility) Generic checksum function
 static unsigned short checksum(void *b, int len) {
     unsigned short *buf = b;
@@ -94,11 +111,13 @@ int send_tcp_syn(const char *ip, int port) {
     inet_pton(AF_INET, ip, &dest.sin_addr);
 
     // Randomize source IP and port
+    srand(get_random_seed());
     uint16_t src_port = (rand() % (65535 - 1024)) + 1024; // ephemeral port
     uint32_t rand_ip = ((rand() & 0xFF) << 24) |          // 1st byte
                        ((rand() & 0xFF) << 16) |          // 2nd byte
                        ((rand() & 0xFF) << 8) |           // 3rd byte
                        (rand() & 0xFF);                   // 4th byte
+    printf("Port selected: %d\n", src_port);
 
     // IP header
     ip_hdr->ihl = 5;     // header length
