@@ -1,8 +1,11 @@
 #!/bin/bash
 
-# Usage: ./run.sh [IP] [PORT]
-TARGET_IP=${1:-127.0.0.1}
-TARGET_PORT=${2:-8000}
+# Usage: sudo ./run.sh [mode] [IP] [PORT]
+# ./run.sh normal 127.0.0.1 8000   # full connect
+# ./run.sh syn 127.0.0.1 8000 # single SYN
+MODE=${1:-normal}
+IP=${2:-127.0.0.1}
+PORT=${3:-8000}
 
 make
-./flooder $TARGET_IP $TARGET_PORT
+sudo ./flooder $MODE $IP $PORT
