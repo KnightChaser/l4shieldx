@@ -88,6 +88,18 @@ int send_tcp_syn(const char *ip, int port) {
     dest.sin_port = htons(port);            // destination port
     inet_pton(AF_INET, ip, &dest.sin_addr); // destination IP
 
+    // Destination address
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(port);
+    inet_pton(AF_INET, ip, &dest.sin_addr);
+
+    // Randomize source IP and port
+    uint16_t src_port = (rand() % (65535 - 1024)) + 1024; // ephemeral port
+    uint32_t rand_ip = ((rand() & 0xFF) << 24) |          // 1st byte
+                       ((rand() & 0xFF) << 16) |          // 2nd byte
+                       ((rand() & 0xFF) << 8) |           // 3rd byte
+                       (rand() & 0xFF);                   // 4th byte
+
     // IP header
     ip_hdr->ihl = 5;     // header length
     ip_hdr->version = 4; // IPv4
@@ -98,22 +110,22 @@ int send_tcp_syn(const char *ip, int port) {
     ip_hdr->frag_off = 0;                 // fragment offset
     ip_hdr->ttl = 255;                    // time to live
     ip_hdr->protocol = IPPROTO_TCP;       // TCP
-    ip_hdr->saddr = inet_addr("0.0.0.0"); // let kernel fill
+    ip_hdr->saddr = htonl(rand_ip);       // source IP (randomized)
     ip_hdr->daddr = dest.sin_addr.s_addr; // destination IP
     ip_hdr->check = 0;                    // checksum is calculated later
     ip_hdr->check =
         checksum(ip_hdr, sizeof(struct iphdr)); // calculate checksum
 
     // TCP header
-    tcp_hdr->source = htons(12345); // source port
-    tcp_hdr->dest = htons(port);    // destination port
-    tcp_hdr->seq = htonl(0);        // sequence number
-    tcp_hdr->ack_seq = 0;           // acknowledgment number
-    tcp_hdr->doff = 5;              // header size
-    tcp_hdr->syn = 1;               // SYN flag
-    tcp_hdr->window = htons(5840);  // TCP window size
-    tcp_hdr->check = 0;             // checksum is calculated later
-    tcp_hdr->urg_ptr = 0;           // urgent pointer
+    tcp_hdr->source = htons(src_port); // source port (randomized)
+    tcp_hdr->dest = htons(port);       // destination port
+    tcp_hdr->seq = htonl(0);           // sequence number
+    tcp_hdr->ack_seq = 0;              // acknowledgment number
+    tcp_hdr->doff = 5;                 // header size
+    tcp_hdr->syn = 1;                  // SYN flag
+    tcp_hdr->window = htons(5840);     // TCP window size
+    tcp_hdr->check = 0;                // checksum is calculated later
+    tcp_hdr->urg_ptr = 0;              // urgent pointer
 
     // Pseudo header + TCP header for checksum
     struct pseudo_header psh;
