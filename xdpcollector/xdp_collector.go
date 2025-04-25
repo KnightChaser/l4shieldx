@@ -92,16 +92,17 @@ func New(ifaceName string, netChan chan string, countChan chan int) (Collector, 
 }
 
 type collector struct {
-	iface     string
-	coll      *ebpf.Collection
-	link      link.Link
-	rd        *ringbuf.Reader
-	buf       bytes.Buffer
-	netChan   chan string
-	countChan chan int
-	counter   int
+	iface     string           // network interface name (e.g. wlo1)
+	coll      *ebpf.Collection // eBPF collection
+	link      link.Link        // eBPF collection
+	rd        *ringbuf.Reader  // ring buffer reader
+	buf       bytes.Buffer     // buffer for reading raw samples
+	netChan   chan string      // channel for network events
+	countChan chan int         // buffer for reading raw samples
+	counter   int              // number of packets seen
 }
 
+// Run starts the collector and waits for TCP packets.
 func (c *collector) Run(ctx context.Context) error {
 	defer c.Close()
 	log.Printf("XDP collector attached to %s – waiting for TCP traffic…", c.iface)
@@ -111,6 +112,7 @@ func (c *collector) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
+// consume reads from the ring buffer and decodes events.
 func (c *collector) consume(ctx context.Context) error {
 	var ev Event
 
@@ -121,6 +123,7 @@ func (c *collector) consume(ctx context.Context) error {
 		default:
 		}
 
+		// Read from the ring buffer.
 		rec, err := c.rd.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) || errors.Is(err, context.Canceled) {
@@ -133,23 +136,25 @@ func (c *collector) consume(ctx context.Context) error {
 		c.buf.Reset()
 		c.buf.Write(rec.RawSample)
 		if err := binary.Read(&c.buf, binary.LittleEndian, &ev); err != nil {
-			log.Printf("[xdp] decode: %v", err)
+			log.Printf("[xdp] decode error: %v", err)
 			continue
 		}
 
 		ts := utility.ConvertBpfNanotime(ev.Ts)
-		msg := fmt.Sprintf("[TCP] %s:%d → %s:%d at %s",
+		msg := fmt.Sprintf("%s:%d → %s:%d at %s",
 			utility.IntToIPv4(ev.Saddr), ev.Sport,
 			utility.IntToIPv4(ev.Daddr), ev.Dport,
 			ts,
 		)
 
+		// Log the event and send it to the channel.
 		c.counter++
 		c.countChan <- c.counter
 		c.netChan <- msg
 	}
 }
 
+// Close releases resources attached to the collector.
 func (c *collector) Close() {
 	if c.rd != nil {
 		c.rd.Close()
