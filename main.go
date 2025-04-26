@@ -29,124 +29,149 @@ func (w ChannelWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func main() {
-	iface := flag.String("iface", "", "network interface to attach XDP program to")
-	flag.Parse()
-
-	// Create the channel
-	sysChan := make(chan string, 200)
-	netChan := make(chan string, 200)
-	countChan := make(chan int, 200)
-
-	log.SetFlags(0)
-	log.SetOutput(ChannelWriter{sysChan})
-
-	if err := rlimit.RemoveMemlock(); err != nil {
-		log.Fatalf("remove memlock: %v", err)
-	}
-
-	coll, err := xdpcollector.New(*iface, netChan, countChan)
-	if err != nil {
-		log.Fatalf("collector init: %v", err)
-	}
-	log.Printf("Starting XDP collector on interface %s", *iface)
-
-	// -- Set up the UI --
-	// (Basic UI setup code, using tview library)
+// setupUI creates and configures the tview application, views, and layout.
+// It returns the application, the root layout flexbox, and the input field.
+func setupUI(sysChan chan string) (*tview.Application, *tview.Flex, *tview.TextView, *tview.TextView, *tview.TextView, *tview.InputField) {
 	app := tview.NewApplication()
-	sysView := tview.NewTextView()
+
+	sysView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetChangedFunc(func() { app.Draw() }) // Redraw on content change
 	sysView.SetBorder(true).SetTitle("System Log")
 
-	netView := tview.NewTextView()
+	netView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetChangedFunc(func() { app.Draw() })
 	netView.SetBorder(true).SetTitle("Network Events")
 
-	cntView := tview.NewTextView()
+	cntView := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter). // Center the count
+		SetChangedFunc(func() { app.Draw() })
 	cntView.SetBorder(true).SetTitle("Packet Count")
 
-	// (Set up input field for user commands, splitting the bottom pane horizontally)
 	input := tview.NewInputField().
 		SetLabel("Command: ").
 		SetFieldWidth(0) // expand to fill
+
 	input.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter {
 			text := input.GetText()
-			// If the user input is inserted,
-			// show the text contents at the system log pane.
+			// If the user input is inserted, show the text contents at the system log pane.
 			if strings.TrimSpace(text) != "" {
 				sysChan <- fmt.Sprintf("[INPUT] %s", text)
 			}
-			input.SetText("")   // clear
-			app.SetFocus(input) // keep focus
+			input.SetText("")   // clear input field
+			app.SetFocus(input) // keep focus on input field
+		} else if key == tcell.KeyEsc {
+			app.SetFocus(input)
 		}
 	})
 
 	// Combine cntView + input into a horizontal Flex
 	bottomFlex := tview.NewFlex().
 		SetDirection(tview.FlexColumn).
-		AddItem(cntView, 0, 1, false).
-		AddItem(input, 0, 2, true)
+		AddItem(cntView, 0, 1, false). // Fixed width proportion for count
+		AddItem(input, 0, 3, true)     // Input field takes more space and has focus
 
 	// Main layout: vertical split
 	layout := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(sysView, 0, 2, false).
-		AddItem(netView, 0, 4, false).
-		AddItem(bottomFlex, 3, 1, true)
+		AddItem(sysView, 0, 2, false).  // System log proportion
+		AddItem(netView, 0, 4, false).  // Network events proportion
+		AddItem(bottomFlex, 3, 1, true) // Bottom row (count + input), has focus initially via input
 
-	// Buffers to keep only the last maxLines entries
+	return app, layout, sysView, netView, cntView, input
+}
+
+// pumpTextview reads lines from a channel and updates a tview.TextView, keeping only maxLines.
+func pumpTextview(app *tview.Application, view *tview.TextView, ch <-chan string, buffer *[]string) {
+	for line := range ch {
+		*buffer = append(*buffer, line)
+		if len(*buffer) > maxLines {
+			*buffer = (*buffer)[1:] // Keep buffer trimmed
+		}
+		// Use QueueUpdateDraw for thread-safe UI updates
+		app.QueueUpdateDraw(func() {
+			view.SetText(strings.Join(*buffer, "\n"))
+			view.ScrollToEnd()
+		})
+	}
+}
+
+// pumpCounterView reads integers from a channel and updates the counter tview.TextView.
+func pumpCounterView(app *tview.Application, view *tview.TextView, ch <-chan int) {
+	for cnt := range ch {
+		// Use QueueUpdateDraw for thread-safe UI updates
+		app.QueueUpdateDraw(func() {
+			view.SetText(fmt.Sprintf("%d", cnt)) // Update text directly
+		})
+	}
+}
+
+func main() {
+	iface := flag.String("iface", "", "network interface to attach XDP program to")
+	flag.Parse()
+
+	if *iface == "" {
+		log.Fatal("Error: -iface flag is required") // Added explicit check
+	}
+
+	// Create channels for communication
+	sysChan := make(chan string, 200)
+	netChan := make(chan string, 200)
+	countChan := make(chan int, 200)
+
+	// Configure standard logger to write to the system log channel
+	log.SetFlags(0) // Keep flags minimal for clean output
+	log.SetOutput(ChannelWriter{Ch: sysChan})
+
+	// Remove memory lock limits for eBPF
+	if err := rlimit.RemoveMemlock(); err != nil {
+		log.Fatalf("Failed to remove memlock limit: %v", err)
+	}
+
+	// Initialize XDP Collector
+	coll, err := xdpcollector.New(*iface, netChan, countChan)
+	if err != nil {
+		log.Fatalf("Collector initialization failed: %v", err)
+	}
+	log.Printf("Starting XDP collector on interface %s", *iface) // Initial log message
+
+	// Setup UI
+	app, layout, sysView, netView, cntView, input := setupUI(sysChan)
+
+	// Buffers to keep only the last maxLines entries for logs
 	var sysLines, netLines []string
 
-	// Pump system log
-	go func() {
-		for line := range sysChan {
-			sysLines = append(sysLines, line)
-			if len(sysLines) > maxLines {
-				sysLines = sysLines[1:]
-			}
-			app.QueueUpdateDraw(func() {
-				sysView.SetText(strings.Join(sysLines, "\n"))
-				sysView.ScrollToEnd()
-			})
-		}
-	}()
+	// Start goroutines to pump data from channels to UI views
+	go pumpTextview(app, sysView, sysChan, &sysLines)
+	go pumpTextview(app, netView, netChan, &netLines)
+	go pumpCounterView(app, cntView, countChan)
 
-	// Pump network events
-	go func() {
-		for line := range netChan {
-			netLines = append(netLines, line)
-			if len(netLines) > maxLines {
-				netLines = netLines[1:]
-			}
-			app.QueueUpdateDraw(func() {
-				netView.SetText(strings.Join(netLines, "\n"))
-				netView.ScrollToEnd()
-			})
-		}
-	}()
-
-	// Pump packet count
-	go func() {
-		for cnt := range countChan {
-			app.QueueUpdateDraw(func() {
-				cntView.Clear()
-				fmt.Fprintf(cntView, "%d", cnt)
-			})
-		}
-	}()
-
-	// Handle shutdown
+	// Handle graceful shutdown on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Run collector
+	// Run the XDP collector in a separate goroutine
 	go func() {
+		log.Printf("Collector run loop starting...") // Log collector start attempt
 		if err := coll.Run(ctx); err != nil {
-			sysChan <- fmt.Sprintf("[ERROR] collector run: %v", err)
+			// Send runtime errors to the system log view
+			sysChan <- fmt.Sprintf("[ERROR] Collector run failed: %v", err)
 		}
+		log.Printf("Collector run loop finished.") // Log collector exit
+		// Optionally close channels or signal UI shutdown here if needed
 	}()
 
-	// Start UI
+	// Start the UI application event loop
+	log.Printf("Starting UI...")
 	if err := app.SetRoot(layout, true).SetFocus(input).Run(); err != nil {
-		log.Fatalf("failed to start UI: %v", err)
+		// Use log.Fatalf which will send to sysChan before exiting if possible,
+		// otherwise prints to stderr.
+		log.Fatalf("Failed to start UI: %v", err)
 	}
+
+	log.Printf("Application exiting.") // This might not always be reached if UI exits abruptly
 }

@@ -21,22 +21,22 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Event mirrors the C struct emitted by the eBPF program.
+// Event mirrors the C struct from the eBPF program.
 type Event struct {
-	Ts    uint64 // nanoseconds
+	Ts    uint64
 	Saddr uint32
 	Daddr uint32
 	Sport uint16
 	Dport uint16
 }
 
-// Collector encapsulates Run/Close.
+// Collector defines Run/Close behavior.
 type Collector interface {
 	Run(ctx context.Context) error
 	Close()
 }
 
-// New returns a ready-to-run Collector.
+// New loads, attaches, and returns an XDP collector.
 func New(ifaceName string, netChan chan string, countChan chan int) (Collector, error) {
 	if strings.TrimSpace(ifaceName) == "" {
 		return nil, fmt.Errorf("interface name is required")
@@ -51,9 +51,9 @@ func New(ifaceName string, netChan chan string, countChan chan int) (Collector, 
 	if err != nil {
 		return nil, fmt.Errorf("get project root: %w", err)
 	}
-	objPath := filepath.Join(root, "xdpcollector", "xdp_prog.o")
+	obj := filepath.Join(root, "xdpcollector", "xdp_prog.o")
 
-	spec, err := ebpf.LoadCollectionSpec(objPath)
+	spec, err := ebpf.LoadCollectionSpec(obj)
 	if err != nil {
 		return nil, fmt.Errorf("load spec: %w", err)
 	}
@@ -81,28 +81,21 @@ func New(ifaceName string, netChan chan string, countChan chan int) (Collector, 
 		return nil, fmt.Errorf("ringbuf reader: %w", err)
 	}
 
-	return &collector{
-		iface:     ifaceName,
-		coll:      coll,
-		link:      lnk,
-		rd:        rd,
-		netChan:   netChan,
-		countChan: countChan,
-	}, nil
+	return &collector{ifaceName, coll, lnk, rd, bytes.Buffer{}, netChan, countChan, 0}, nil
 }
 
 type collector struct {
-	iface     string           // network interface name (e.g. wlo1)
+	iface     string           // network interface name
 	coll      *ebpf.Collection // eBPF collection
-	link      link.Link        // eBPF collection
+	link      link.Link        // XDP link
 	rd        *ringbuf.Reader  // ring buffer reader
-	buf       bytes.Buffer     // buffer for reading raw samples
-	netChan   chan string      // channel for network events
-	countChan chan int         // buffer for reading raw samples
-	counter   int              // number of packets seen
+	buf       bytes.Buffer     // buffer for raw sample
+	netChan   chan string      //	channel for network events
+	countChan chan int         // channel for counter events
+	counter   int              // counter for events (packet count)
 }
 
-// Run starts the collector and waits for TCP packets.
+// Run attaches and consumes events until context cancellation.
 func (c *collector) Run(ctx context.Context) error {
 	defer c.Close()
 	log.Printf("XDP collector attached to %s – waiting for TCP traffic…", c.iface)
@@ -112,10 +105,9 @@ func (c *collector) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
-// consume reads from the ring buffer and decodes events.
+// consume reads raw samples, decodes Event, and pushes to channels.
 func (c *collector) consume(ctx context.Context) error {
 	var ev Event
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -123,7 +115,6 @@ func (c *collector) consume(ctx context.Context) error {
 		default:
 		}
 
-		// Read from the ring buffer.
 		rec, err := c.rd.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) || errors.Is(err, context.Canceled) {
@@ -147,14 +138,13 @@ func (c *collector) consume(ctx context.Context) error {
 			ts,
 		)
 
-		// Log the event and send it to the channel.
 		c.counter++
 		c.countChan <- c.counter
 		c.netChan <- msg
 	}
 }
 
-// Close releases resources attached to the collector.
+// Close cleans up ring buffer, link, and collection.
 func (c *collector) Close() {
 	if c.rd != nil {
 		c.rd.Close()
