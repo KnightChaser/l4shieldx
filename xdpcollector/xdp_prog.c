@@ -4,8 +4,17 @@
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_endian.h>
+#include <bpf/bpf_helpers.h>
 
 char LICENSE[] SEC("license") = "GPL";
+
+// IPv4 block list
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(__u8));
+} blocked_ips SEC(".maps");
 
 struct event_t {
     __u64 ts;    // BPF timestamp of the packet arrival
@@ -65,6 +74,15 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
     // If the packet is not a TCP packet, pass it to the next layer.
     if (!parse_tcp(ctx, &data_end, &eth, &ip, &tcp)) {
         return XDP_PASS;
+    }
+
+    // Check if the source IP address is in the block list.
+    __u32 src = bpf_ntohl(ip->saddr);
+    __u8 *blocked = bpf_map_lookup_elem(&blocked_ips, &src);
+    if (blocked && *blocked) {
+        // log to trace_pipe
+        bpf_printk("DROP %u\n", src);
+        // return XDP_DROP;  (Not dropping the packet for now!)
     }
 
     // Reserve space in the ring buffer for the event.

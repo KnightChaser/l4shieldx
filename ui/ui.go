@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -56,19 +55,6 @@ func SetupUI(sysChan chan string) (
 	input := tview.NewInputField().
 		SetLabel("Command: ").
 		SetFieldWidth(0)
-
-	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			text := input.GetText()
-			if strings.TrimSpace(text) != "" {
-				sysChan <- fmt.Sprintf("[INPUT] %s", text)
-			}
-			input.SetText("")
-			app.SetFocus(input)
-		} else if key == tcell.KeyEsc {
-			app.SetFocus(input)
-		}
-	})
 
 	bottomFlex := tview.NewFlex().
 		SetDirection(tview.FlexColumn).

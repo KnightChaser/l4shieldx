@@ -34,6 +34,8 @@ type Event struct {
 type Collector interface {
 	Run(ctx context.Context) error
 	Close()
+	Block(ip net.IP) error
+	Unblock(ip net.IP) error
 }
 
 // New loads, attaches, and returns an XDP collector.
@@ -81,7 +83,23 @@ func New(ifaceName string, netChan chan string, countChan chan int) (Collector, 
 		return nil, fmt.Errorf("ringbuf reader: %w", err)
 	}
 
-	return &collector{ifaceName, coll, lnk, rd, bytes.Buffer{}, netChan, countChan, 0}, nil
+	blockedMap := coll.Maps["blocked_ips"]
+	if blockedMap == nil {
+		lnk.Close()
+		coll.Close()
+		return nil, fmt.Errorf("blocked_ips map not found")
+	}
+
+	return &collector{
+		iface:     ifaceName,
+		coll:      coll,
+		link:      lnk,
+		rd:        rd,
+		buf:       bytes.Buffer{},
+		netChan:   netChan,
+		countChan: countChan,
+		blocked:   blockedMap,
+	}, nil
 }
 
 type collector struct {
@@ -93,6 +111,7 @@ type collector struct {
 	netChan   chan string      //	channel for network events
 	countChan chan int         // channel for counter events
 	counter   int              // counter for events (packet count)
+	blocked   *ebpf.Map        // blocked IPs map (IPv4 address, block status)
 }
 
 // Run attaches and consumes events until context cancellation.
@@ -142,6 +161,19 @@ func (c *collector) consume(ctx context.Context) error {
 		c.countChan <- c.counter
 		c.netChan <- msg
 	}
+}
+
+// Block adds the IP to the blocked_ips map.
+func (c *collector) Block(ip net.IP) error {
+	key := binary.BigEndian.Uint32(ip.To4())
+	var one uint8 = 1
+	return c.blocked.Update(key, one, ebpf.UpdateAny)
+}
+
+// Unblock removes the IP from the blocked_ips map.
+func (c *collector) Unblock(ip net.IP) error {
+	key := binary.BigEndian.Uint32(ip.To4())
+	return c.blocked.Delete(key)
 }
 
 // Close cleans up ring buffer, link, and collection.

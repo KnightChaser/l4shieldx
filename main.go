@@ -6,13 +6,16 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"l4shieldx/ui"
 	"l4shieldx/xdpcollector"
 
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/gdamore/tcell/v2"
 )
 
 func main() {
@@ -46,6 +49,36 @@ func main() {
 
 	// Setup UI
 	app, layout, sysView, netView, cntView, input := ui.SetupUI(sysChan)
+
+	// Handle text input for deny/allow commands
+	input.SetDoneFunc(func(key tcell.Key) {
+		if key != tcell.KeyEnter {
+			return
+		}
+		text := strings.TrimSpace(input.GetText())
+		parts := strings.Fields(text)
+		if len(parts) != 2 || (parts[0] != "deny" && parts[0] != "allow") {
+			sysChan <- fmt.Sprintf("[ERROR] invalid command: %q", text)
+		} else if ip := net.ParseIP(parts[1]).To4(); ip == nil {
+			sysChan <- fmt.Sprintf("[ERROR] invalid IP: %q", parts[1])
+		} else {
+			var err error
+			if parts[0] == "deny" {
+				err = coll.Block(ip)
+			} else {
+				err = coll.Unblock(ip)
+			}
+			if err != nil {
+				sysChan <- fmt.Sprintf("[ERROR] %s %s failed: %v",
+					parts[0], parts[1], err)
+			} else {
+				sysChan <- fmt.Sprintf("[SYS] %s %s succeeded",
+					strings.ToUpper(parts[0]), parts[1])
+			}
+		}
+		input.SetText("")   // clear the field
+		app.SetFocus(input) // put focus back where it belongs
+	})
 
 	// Buffers to keep only the last maxLines entries for logs
 	var sysLines, netLines []string
