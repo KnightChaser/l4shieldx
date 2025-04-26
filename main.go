@@ -6,13 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"l4shieldx/ui"
 	"l4shieldx/xdpcollector"
+	"l4shieldx/xdpcollector/utility"
 
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/gdamore/tcell/v2"
@@ -55,29 +55,31 @@ func main() {
 		if key != tcell.KeyEnter {
 			return
 		}
-		text := strings.TrimSpace(input.GetText())
-		parts := strings.Fields(text)
-		if len(parts) != 2 || (parts[0] != "deny" && parts[0] != "allow") {
-			sysChan <- fmt.Sprintf("[ERROR] invalid command: %q", text)
-		} else if ip := net.ParseIP(parts[1]).To4(); ip == nil {
-			sysChan <- fmt.Sprintf("[ERROR] invalid IP: %q", parts[1])
+		text := input.GetText()
+		cmd, err := utility.ParseCommand(text)
+		if err != nil {
+			sysChan <- fmt.Sprintf("[ERROR] %v", err)
 		} else {
-			var err error
-			if parts[0] == "deny" {
-				err = coll.Block(ip)
-			} else {
-				err = coll.Unblock(ip)
+			// Conduct the operation based on the command
+			var opErr error
+			switch cmd.Op {
+			case utility.OpDeny:
+				opErr = coll.Block(cmd.IP)
+			case utility.OpAllow:
+				opErr = coll.Unblock(cmd.IP)
 			}
-			if err != nil {
+
+			// Send the result to the system log view
+			if opErr != nil {
 				sysChan <- fmt.Sprintf("[ERROR] %s %s failed: %v",
-					parts[0], parts[1], err)
+					cmd.Op, cmd.IP, opErr)
 			} else {
 				sysChan <- fmt.Sprintf("[SYS] %s %s succeeded",
-					strings.ToUpper(parts[0]), parts[1])
+					strings.ToUpper(cmd.Op.String()), cmd.IP)
 			}
 		}
-		input.SetText("")   // clear the field
-		app.SetFocus(input) // put focus back where it belongs
+		input.SetText("")
+		app.SetFocus(input)
 	})
 
 	// Buffers to keep only the last maxLines entries for logs
