@@ -11,8 +11,8 @@ import (
 type Opcode int
 
 const (
-	OpDeny  Opcode = iota // drop matching traffic
-	OpAllow               // allow matching traffic
+	OpDeny  Opcode = iota + 1 // drop matching traffic
+	OpAllow                   // allow matching traffic
 )
 
 // String returns a string representation of the Opcode.
