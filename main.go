@@ -23,15 +23,18 @@ func main() {
 	flag.Parse()
 
 	if *iface == "" {
-		log.Fatal("Error: -iface flag is required") // Added explicit check
+		log.Fatal("Error: -iface flag is required")
 	}
 
 	// Create channels for communication
 	sysChan := make(chan string, 200)
 	netChan := make(chan string, 200)
+	// Channels for pushing allowed/denied stats to the UI
+	allowChan := make(chan utility.TrafficStat, 200)
+	denyChan := make(chan utility.TrafficStat, 200)
 
 	// Configure standard logger to write to the system log channel
-	log.SetFlags(0) // Keep flags minimal for clean output
+	log.SetFlags(0)
 	log.SetOutput(ui.ChannelWriter{Ch: sysChan})
 
 	// Remove memory lock limits for eBPF
@@ -40,17 +43,14 @@ func main() {
 	}
 
 	// Initialize XDP Collector
-	coll, err := xdpcollector.New(*iface, netChan)
+	coll, err := xdpcollector.New(*iface, netChan, allowChan, denyChan)
 	if err != nil {
 		log.Fatalf("Collector initialization failed: %v", err)
 	}
-	log.Printf("Starting XDP collector on interface %s", *iface) // Initial log message
+	log.Printf("Starting XDP collector on interface %s", *iface)
 
 	// Setup UI
-	app, layout, sysView, netView, cntView, input := ui.SetupUI(sysChan)
-
-	// TODO: Just to suppress unused variable warnings
-	cntView.Clear()
+	app, layout, sysView, netView, allowedView, deniedView, input := ui.SetupUI(sysChan)
 
 	// Handle text input for deny/allow commands
 	input.SetDoneFunc(func(key tcell.Key) {
@@ -62,7 +62,6 @@ func main() {
 		if err != nil {
 			sysChan <- fmt.Sprintf("[ERROR] %v", err)
 		} else {
-			// Conduct the operation based on the command
 			var opErr error
 			switch cmd.Op {
 			case utility.OpDeny:
@@ -71,7 +70,6 @@ func main() {
 				opErr = coll.Unblock(cmd.IP)
 			}
 
-			// Send the result to the system log view
 			if opErr != nil {
 				sysChan <- fmt.Sprintf("[ERROR] %s %s failed: %v",
 					cmd.Op, cmd.IP, opErr)
@@ -91,28 +89,29 @@ func main() {
 	go ui.PumpTextview(app, sysView, sysChan, &sysLines)
 	go ui.PumpTextview(app, netView, netChan, &netLines)
 
+	// Pump allowed/denied counts to UI
+	go ui.PumpCounterView(app, allowedView, allowChan)
+	go ui.PumpCounterView(app, deniedView, denyChan)
+
 	// Handle graceful shutdown on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// Run the XDP collector in a separate goroutine
 	go func() {
-		log.Printf("Collector run loop starting...") // Log collector start attempt
+		log.Printf("Collector run loop starting...")
 		if err := coll.Run(ctx); err != nil {
 			// Send runtime errors to the system log view
 			sysChan <- fmt.Sprintf("[ERROR] Collector run failed: %v", err)
 		}
-		log.Printf("Collector run loop finished.") // Log collector exit
-		// Optionally close channels or signal UI shutdown here if needed
+		log.Printf("Collector run loop finished.")
 	}()
 
 	// Start the UI application event loop
 	log.Printf("Starting UI...")
 	if err := app.SetRoot(layout, true).SetFocus(input).Run(); err != nil {
-		// Use log.Fatalf which will send to sysChan before exiting if possible,
-		// otherwise prints to stderr.
 		log.Fatalf("Failed to start UI: %v", err)
 	}
 
-	log.Printf("Application exiting.") // This might not always be reached if UI exits abruptly
+	log.Printf("Application exiting.")
 }
