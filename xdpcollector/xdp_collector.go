@@ -37,11 +37,12 @@ type collector struct {
 	coll      *ebpf.Collection
 	link      link.Link
 	rd        *ringbuf.Reader
-	buf       bytes.Buffer  // for binary.Read
-	netChan   chan<- string // formatted event strings
-	allowChan chan<- utility.TrafficStat
-	denyChan  chan<- utility.TrafficStat
-	blocked   *ebpf.Map // blocklist map
+	buf       bytes.Buffer               // for binary.Read
+	sysChan   chan<- string              // formatted system messages
+	netChan   chan<- string              // formatted event strings
+	allowChan chan<- utility.TrafficStat // formatted allowed traffic stats
+	denyChan  chan<- utility.TrafficStat // formatted denied traffic stats
+	blocked   *ebpf.Map                  // blocklist map
 }
 
 // New loads the eBPF program (xdp_prog.o), attaches it to ifaceName,
@@ -49,11 +50,13 @@ type collector struct {
 // and periodic TrafficStat into allowChan/denyChan.
 //
 //	ifaceName: name of network interface (e.g. "eth0")
+//	sysChan:   chan<- string  — formatted system messages
 //	netChan:   chan<- string  — formatted “src:port → dst:port at TIMESTAMP”
 //	allowChan: chan<- utility.TrafficStat
 //	denyChan:  chan<- utility.TrafficStat
 func New(
 	ifaceName string,
+	sysChan chan<- string,
 	netChan chan<- string,
 	allowChan chan<- utility.TrafficStat,
 	denyChan chan<- utility.TrafficStat,
@@ -118,6 +121,7 @@ func New(
 		link:      lnk,
 		rd:        rd,
 		buf:       bytes.Buffer{},
+		sysChan:   sysChan,
 		netChan:   netChan,
 		allowChan: allowChan,
 		denyChan:  denyChan,

@@ -41,7 +41,8 @@ func (c *collector) Run(ctx context.Context) error {
 				// Fetch per-CPU aggregated stats
 				allowPkts, allowBytes, denyPkts, denyBytes, err := c.Stats()
 				if err != nil {
-					log.Printf("[stats] error: %v", err)
+					msg := fmt.Sprintf("[stats] error: %v", err)
+					c.sysChan <- msg
 					continue
 				}
 				// Send TrafficStat structs to UI
@@ -70,7 +71,8 @@ func (c *collector) consume(ctx context.Context) error {
 			if errors.Is(err, ringbuf.ErrClosed) || errors.Is(err, context.Canceled) {
 				return nil
 			}
-			log.Printf("[xdp] ringbuf read: %v", err)
+			msg := fmt.Sprintf("[xdp] ringbuf read: %v", err)
+			c.sysChan <- msg
 			continue
 		}
 
@@ -79,7 +81,8 @@ func (c *collector) consume(ctx context.Context) error {
 		c.buf.Reset()
 		c.buf.Write(rec.RawSample)
 		if err := binary.Read(&c.buf, binary.LittleEndian, &ev); err != nil {
-			log.Printf("[xdp] decode error: %v", err)
+			msg := fmt.Sprintf("[xdp] decode error: %v", err)
+			c.sysChan <- msg
 			continue
 		}
 

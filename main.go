@@ -43,7 +43,8 @@ func main() {
 	}
 
 	// Initialize XDP Collector
-	coll, err := xdpcollector.New(*iface, netChan, allowChan, denyChan)
+	coll, err := xdpcollector.New(*iface, sysChan, netChan, allowChan, denyChan)
+
 	if err != nil {
 		log.Fatalf("Collector initialization failed: %v", err)
 	}
