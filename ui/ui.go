@@ -4,12 +4,13 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"l4shieldx/xdpcollector/utility"
 
 	"github.com/rivo/tview"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 const MaxLines = 100 // keep the last 100 entries, exported
@@ -98,7 +99,9 @@ func PumpTextview(app *tview.Application, view *tview.TextView, ch <-chan string
 func PumpCounterView(app *tview.Application, view *tview.TextView, ch <-chan utility.TrafficStat) {
 	for stat := range ch {
 		app.QueueUpdateDraw(func() {
-			view.SetText(fmt.Sprintf("%d Pkts\n(%d B)", stat.Pkts, stat.Bytes))
+			p := message.NewPrinter(language.English)
+			msg := p.Sprintf("%d Pkts\n(%d B)", stat.Pkts, stat.Bytes)
+			view.SetText(msg)
 		})
 	}
 }
