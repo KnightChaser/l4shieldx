@@ -30,12 +30,23 @@ type Event struct {
 	Dport uint16
 }
 
+const (
+	TRAFFIC_ALLOWED = 0
+	TRAFFIC_DENIED  = 1
+)
+
 // Collector defines Run/Close behavior.
 type Collector interface {
+	// Basic Collector methods
 	Run(ctx context.Context) error
 	Close()
+
+	// Enforce network policies
 	Block(ip net.IP) error
 	Unblock(ip net.IP) error
+
+	// Stats returns allowedPkts, allowedBytes, deniedPkts, deniedBytes
+	Stats() (uint64, uint64, uint64, uint64, error)
 }
 
 // New loads, attaches, and returns an XDP collector.
@@ -174,6 +185,38 @@ func (c *collector) Block(ip net.IP) error {
 func (c *collector) Unblock(ip net.IP) error {
 	key := binary.BigEndian.Uint32(ip.To4())
 	return c.blocked.Delete(key)
+}
+
+func (c *collector) Stats() (allowCnt, allowBytes, denyCnt, denyBytes uint64, err error) {
+	// helper to read and sum per-CPU
+	sumPerCPU := func(m *ebpf.Map, key uint32) (uint64, error) {
+		var percpu []uint64
+		if err := m.Lookup(key, &percpu); err != nil {
+			return 0, err
+		}
+		var sum uint64
+		for _, v := range percpu {
+			sum += v
+		}
+		return sum, nil
+	}
+
+	// allowed/denied packet counts
+	if allowCnt, err = sumPerCPU(c.coll.Maps["packet_count"], TRAFFIC_ALLOWED); err != nil {
+		return
+	}
+	if denyCnt, err = sumPerCPU(c.coll.Maps["packet_count"], TRAFFIC_DENIED); err != nil {
+		return
+	}
+
+	// allowed/denied byte counts
+	if allowBytes, err = sumPerCPU(c.coll.Maps["packet_bytes"], TRAFFIC_ALLOWED); err != nil {
+		return
+	}
+	if denyBytes, err = sumPerCPU(c.coll.Maps["packet_bytes"], TRAFFIC_DENIED); err != nil {
+		return
+	}
+	return
 }
 
 // Close cleans up ring buffer, link, and collection.
