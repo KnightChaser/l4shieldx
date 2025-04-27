@@ -29,7 +29,6 @@ func main() {
 	// Create channels for communication
 	sysChan := make(chan string, 200)
 	netChan := make(chan string, 200)
-	countChan := make(chan int, 200)
 
 	// Configure standard logger to write to the system log channel
 	log.SetFlags(0) // Keep flags minimal for clean output
@@ -41,7 +40,7 @@ func main() {
 	}
 
 	// Initialize XDP Collector
-	coll, err := xdpcollector.New(*iface, netChan, countChan)
+	coll, err := xdpcollector.New(*iface, netChan)
 	if err != nil {
 		log.Fatalf("Collector initialization failed: %v", err)
 	}
@@ -49,6 +48,9 @@ func main() {
 
 	// Setup UI
 	app, layout, sysView, netView, cntView, input := ui.SetupUI(sysChan)
+
+	// TODO: Just to suppress unused variable warnings
+	cntView.Clear()
 
 	// Handle text input for deny/allow commands
 	input.SetDoneFunc(func(key tcell.Key) {
@@ -88,7 +90,6 @@ func main() {
 	// Start goroutines to pump data from channels to UI views
 	go ui.PumpTextview(app, sysView, sysChan, &sysLines)
 	go ui.PumpTextview(app, netView, netChan, &netLines)
-	go ui.PumpCounterView(app, cntView, countChan)
 
 	// Handle graceful shutdown on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -50,7 +50,7 @@ type Collector interface {
 }
 
 // New loads, attaches, and returns an XDP collector.
-func New(ifaceName string, netChan chan string, countChan chan int) (Collector, error) {
+func New(ifaceName string, netChan chan string) (Collector, error) {
 	if strings.TrimSpace(ifaceName) == "" {
 		return nil, fmt.Errorf("interface name is required")
 	}
@@ -102,27 +102,24 @@ func New(ifaceName string, netChan chan string, countChan chan int) (Collector, 
 	}
 
 	return &collector{
-		iface:     ifaceName,
-		coll:      coll,
-		link:      lnk,
-		rd:        rd,
-		buf:       bytes.Buffer{},
-		netChan:   netChan,
-		countChan: countChan,
-		blocked:   blockedMap,
+		iface:   ifaceName,
+		coll:    coll,
+		link:    lnk,
+		rd:      rd,
+		buf:     bytes.Buffer{},
+		netChan: netChan,
+		blocked: blockedMap,
 	}, nil
 }
 
 type collector struct {
-	iface     string           // network interface name
-	coll      *ebpf.Collection // eBPF collection
-	link      link.Link        // XDP link
-	rd        *ringbuf.Reader  // ring buffer reader
-	buf       bytes.Buffer     // buffer for raw sample
-	netChan   chan string      //	channel for network events
-	countChan chan int         // channel for counter events
-	counter   int              // counter for events (packet count)
-	blocked   *ebpf.Map        // blocked IPs map (IPv4 address, block status)
+	iface   string           // network interface name
+	coll    *ebpf.Collection // eBPF collection
+	link    link.Link        // XDP link
+	rd      *ringbuf.Reader  // ring buffer reader
+	buf     bytes.Buffer     // buffer for raw sample
+	netChan chan string      //	channel for network events
+	blocked *ebpf.Map        // blocked IPs map (IPv4 address, block status)
 }
 
 // Run attaches and consumes events until context cancellation.
@@ -168,8 +165,6 @@ func (c *collector) consume(ctx context.Context) error {
 			ts,
 		)
 
-		c.counter++
-		c.countChan <- c.counter
 		c.netChan <- msg
 	}
 }
