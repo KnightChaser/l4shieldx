@@ -11,6 +11,7 @@ import (
 	"net"
 	"time"
 
+	"l4shieldx/ui"
 	"l4shieldx/xdpcollector/utility"
 
 	"github.com/cilium/ebpf"
@@ -87,12 +88,8 @@ func (c *collector) consume(ctx context.Context) error {
 		}
 
 		// Format timestamp and message
-		ts := utility.ConvertBpfNanotime(ev.Ts)
-		msg := fmt.Sprintf("%s:%d → %s:%d at %s",
-			utility.IntToIPv4(ev.Saddr), ev.Sport,
-			utility.IntToIPv4(ev.Daddr), ev.Dport,
-			ts,
-		)
+		msg := ui.FormatNewViewMsg(ev.Ts, ev.Saddr, ev.Daddr, ev.Sport, ev.Dport)
+
 		c.netChan <- msg
 	}
 }
