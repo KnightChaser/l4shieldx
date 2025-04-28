@@ -3,30 +3,35 @@ package ui
 
 import (
 	"bufio"
-	"fmt"
+	"bytes"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"l4shieldx/xdpcollector/utility"
 )
 
 const (
-	// Column widths for fixed-width alignment
-	timeColWidth     = 25
-	endpointColWidth = 30
+	timeColWidth     = 25 // width of the timestamp column
+	endpointColWidth = 30 // width of each “IP:port (PROTO)” column
 )
 
-// services maps well-known ports to their protocol names (e.g. 443→“HTTPS”).
+// pool holds reusable *bytes.Buffer instances
+var bufPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
+// services maps well-known ports → protocol name (e.g. 443 -> "HTTPS")
 var services map[int]string
 
 func init() {
-	// One-time startup cost: parse /etc/services into a map.
 	services = make(map[int]string)
 	f, err := os.Open("/etc/services")
 	if err != nil {
-		// If it fails, we skip protocol names but keep logging.
-		return
+		return // skip protocol lookup if we can’t read file
 	}
 	defer f.Close()
 
@@ -36,54 +41,89 @@ func init() {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
 			continue
 		}
-		svcName := strings.ToUpper(parts[0])
-		pp := strings.Split(parts[1], "/")
-		if len(pp) != 2 {
+		name := strings.ToUpper(fields[0])
+		parts := strings.Split(fields[1], "/")
+		if len(parts) != 2 {
 			continue
 		}
-		port, err := strconv.Atoi(pp[0])
+		port, err := strconv.Atoi(parts[0])
 		if err != nil {
 			continue
 		}
-		services[port] = svcName
+		services[port] = name
 	}
 }
 
-// getService returns the uppercase service name for a port, or "".
 func getService(port uint16) string {
 	return services[int(port)]
 }
 
-// FormatNewViewMsg builds a fixed-width log line:
-// [timestamp] [srcIP:port (PROTO)] → [dstIP:port (PROTO)]
+// FormatNewViewMsg builds a fixed-width, CSV-like line with minimal allocations.
 func FormatNewViewMsg(
 	timestamp uint64,
 	srcIP uint32, dstIP uint32,
 	srcPort uint16, dstPort uint16,
 ) string {
+	// Grab a buffer from the pool and reset it
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+
+	// Convert timestamp
 	ts := utility.ConvertBpfNanotime(timestamp)
+	writePadded(buf, ts, timeColWidth)
 
-	// Base “IP:port” strings
-	src := fmt.Sprintf("%s:%d", utility.IntToIPv4(srcIP), srcPort)
-	dst := fmt.Sprintf("%s:%d", utility.IntToIPv4(dstIP), dstPort)
+	buf.WriteByte(' ') // column separator
 
-	// Append protocol name if known
+	// Build src endpoint
+	buf.WriteString(utility.IntToIPv4(srcIP))
+	buf.WriteByte(':')
+	buf.WriteString(strconv.Itoa(int(srcPort)))
 	if svc := getService(srcPort); svc != "" {
-		src = fmt.Sprintf("%s (%s)", src, svc)
+		buf.WriteString(" (")
+		buf.WriteString(svc)
+		buf.WriteByte(')')
 	}
-	if svc := getService(dstPort); svc != "" {
-		dst = fmt.Sprintf("%s (%s)", dst, svc)
-	}
+	writePadding(buf, endpointColWidth-len(buf.Bytes())+len(ts)+1) // pad to endpointColWidth
 
-	// Fixed-width, left-aligned columns for neat CSV-like logs
-	return fmt.Sprintf(
-		"%-*s %-*s → %-*s",
-		timeColWidth, ts,
-		endpointColWidth, src,
-		endpointColWidth, dst,
-	)
+	buf.WriteString("->")
+
+	// Build dst endpoint
+	buf.WriteString(utility.IntToIPv4(dstIP))
+	buf.WriteByte(':')
+	buf.WriteString(strconv.Itoa(int(dstPort)))
+	if svc := getService(dstPort); svc != "" {
+		buf.WriteString(" (")
+		buf.WriteString(svc)
+		buf.WriteByte(')')
+	}
+	writePadding(buf, endpointColWidth-buf.Len()+timeColWidth+1) // pad last column
+
+	// Extract result string (copies once) and return buffer to pool
+	result := buf.String()
+	bufPool.Put(buf)
+	return result
+}
+
+// writePadded writes s left-aligned in a field of width w
+func writePadded(buf *bytes.Buffer, s string, w int) {
+	buf.WriteString(s)
+	writePadding(buf, w-len(s))
+}
+
+// writePadding writes n spaces (n ≤ 0 → no op)
+func writePadding(buf *bytes.Buffer, n int) {
+	for n > 0 {
+		const chunk = "          " // 10 spaces
+		if n >= len(chunk) {
+			buf.WriteString(chunk)
+			n -= len(chunk)
+		} else {
+			buf.WriteString(chunk[:n])
+			return
+		}
+	}
 }
