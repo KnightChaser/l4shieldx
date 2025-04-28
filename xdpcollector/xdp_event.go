@@ -1,4 +1,4 @@
-// xdpcollector/event.go
+// xdpcollector/xdp_event.go
 package xdpcollector
 
 // Event mirrors the C struct emitted by the XDP program.
