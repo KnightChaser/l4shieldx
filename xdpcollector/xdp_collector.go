@@ -1,74 +1,93 @@
-// xdpcollector/xdp_collector.go
+// xdpcollector/collector.go
 package xdpcollector
 
 import (
-	"C"
 	"bytes"
 	"context"
-	"encoding/binary"
-	"errors"
 	"fmt"
-	"log"
 	"net"
 	"path/filepath"
+	"strings"
 
 	"l4shieldx/xdpcollector/utility"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
-	"golang.org/x/sync/errgroup"
 )
 
-// -----------------------------------------------------------------------------
-// Public surface
-// -----------------------------------------------------------------------------
-
-// Event mirrors the C structure emitted by the eBPF program.
-type Event struct {
-	Ts    uint64 // BPF timestamp in nanoseconds of the packet arrival.
-	Saddr uint32 // Source address in network byte order.
-	Daddr uint32 // Destination address in network byte order.
-	Sport uint16 // Source port in network byte order.
-	Dport uint16 // Destination port in network byte order.
-}
-
-// Collector is the only thing an external package needs to use.
+// Collector runs the XDP program, enforces blocklist, and emits events/stats.
 type Collector interface {
+	// Run attaches XDP, consumes events, and pumps stats until ctx cancellation.
 	Run(ctx context.Context) error
+	// Close tears down XDP and frees resources.
 	Close()
+
+	// Block inserts ip into the blocked_ips map.
+	Block(ip net.IP) error
+	// Unblock removes ip from the blocked_ips map.
+	Unblock(ip net.IP) error
+
+	// Network stats returns: allowedPkts, allowedBytes, deniedPkts, deniedBytes.
+	Stats() (uint64, uint64, uint64, uint64, error)
 }
 
-// New returns a ready‑to‑run Collector.  ifaceName may be empty to use the
-// interface passed with ‑iface on the CLI (main.go) or “eth0” as fallback.
-func New(ifaceName string) (Collector, error) {
-	if ifaceName == "" {
+type collector struct {
+	iface     string
+	coll      *ebpf.Collection
+	link      link.Link
+	rd        *ringbuf.Reader
+	buf       bytes.Buffer               // for binary.Read
+	sysChan   chan<- string              // formatted system messages
+	netChan   chan<- string              // formatted event strings
+	allowChan chan<- utility.TrafficStat // formatted allowed traffic stats
+	denyChan  chan<- utility.TrafficStat // formatted denied traffic stats
+	blocked   *ebpf.Map                  // blocklist map
+}
+
+// New loads the eBPF program (xdp_prog.o), attaches it to ifaceName,
+// and returns a Collector that will push raw events to netChan
+// and periodic TrafficStat into allowChan/denyChan.
+//
+//	ifaceName: name of network interface (e.g. "eth0")
+//	sysChan:   chan<- string  — formatted system messages
+//	netChan:   chan<- string  — formatted “src:port → dst:port at TIMESTAMP”
+//	allowChan: chan<- utility.TrafficStat
+//	denyChan:  chan<- utility.TrafficStat
+func New(
+	ifaceName string,
+	sysChan chan<- string,
+	netChan chan<- string,
+	allowChan chan<- utility.TrafficStat,
+	denyChan chan<- utility.TrafficStat,
+) (Collector, error) {
+	// Validate interface
+	if strings.TrimSpace(ifaceName) == "" {
 		return nil, fmt.Errorf("interface name is required")
 	}
-
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
 		return nil, fmt.Errorf("lookup interface %q: %w", ifaceName, err)
 	}
 
-	// Load the eBPF program from the object file.
-	// Project root is the directory containing the executable.
-	projectRoot, err := utility.GetProjectRoot()
+	// Locate compiled program
+	root, err := utility.GetProjectRoot()
 	if err != nil {
 		return nil, fmt.Errorf("get project root: %w", err)
 	}
-	obj := filepath.Join(projectRoot, "xdpcollector", "xdp_prog.o")
+	obj := filepath.Join(root, "xdpcollector", "xdp_prog.o")
+
+	// Load & create collection
 	spec, err := ebpf.LoadCollectionSpec(obj)
 	if err != nil {
 		return nil, fmt.Errorf("load spec: %w", err)
 	}
-
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
 		return nil, fmt.Errorf("create collection: %w", err)
 	}
 
-	// Attach in generic mode for widest NIC compatibility.
+	// Attach XDP
 	prog := coll.Programs["xdp_tcp_hello"]
 	lnk, err := link.AttachXDP(link.XDPOptions{
 		Program:   prog,
@@ -80,6 +99,7 @@ func New(ifaceName string) (Collector, error) {
 		return nil, fmt.Errorf("attach XDP: %w", err)
 	}
 
+	// Prepare ring buffer reader for Event structs
 	rd, err := ringbuf.NewReader(coll.Maps["events"])
 	if err != nil {
 		lnk.Close()
@@ -87,78 +107,24 @@ func New(ifaceName string) (Collector, error) {
 		return nil, fmt.Errorf("ringbuf reader: %w", err)
 	}
 
+	// Ensure blocked_ips map exists
+	blockedMap := coll.Maps["blocked_ips"]
+	if blockedMap == nil {
+		lnk.Close()
+		coll.Close()
+		return nil, fmt.Errorf("blocked_ips map not found")
+	}
+
 	return &collector{
-		iface: ifaceName,
-		coll:  coll,
-		link:  lnk,
-		rd:    rd,
+		iface:     ifaceName,
+		coll:      coll,
+		link:      lnk,
+		rd:        rd,
+		buf:       bytes.Buffer{},
+		sysChan:   sysChan,
+		netChan:   netChan,
+		allowChan: allowChan,
+		denyChan:  denyChan,
+		blocked:   blockedMap,
 	}, nil
-}
-
-// -----------------------------------------------------------------------------
-// Internal implementation
-// -----------------------------------------------------------------------------
-
-type collector struct {
-	iface string           // NIC(Network Interface Card) name
-	coll  *ebpf.Collection // eBPF collection
-	link  link.Link        // XDP link
-	rd    *ringbuf.Reader  // Ring buffer reader for events
-	buf   bytes.Buffer     // Buffer for reading events
-}
-
-func (c *collector) Run(ctx context.Context) error {
-	defer c.Close()
-
-	log.Printf("XDP collector attached to %s – waiting for TCP traffic…", c.iface)
-
-	// Manage concurrency with errgroup.
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return c.consume(gctx) })
-	return g.Wait()
-}
-
-func (c *collector) consume(ctx context.Context) error {
-	var ev Event
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-
-		rec, err := c.rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) || errors.Is(err, context.Canceled) {
-				return nil
-			}
-			log.Printf("[xdp] ringbuf read: %v", err)
-			continue
-		}
-
-		// Use bytes.Buffer to read the event to reduce GC pressure
-		c.buf.Reset()
-		c.buf.Write(rec.RawSample)
-		if err := binary.Read(&c.buf, binary.LittleEndian, &ev); err != nil {
-			log.Printf("[xdp] decode: %v", err)
-			continue
-		}
-
-		timestamp := utility.ConvertBpfNanotime(ev.Ts)
-		fmt.Printf("[TCP] %s:%d → %s:%d at %s\n",
-			utility.IntToIPv4(ev.Saddr), ev.Sport, utility.IntToIPv4(ev.Daddr), ev.Dport, timestamp)
-	}
-}
-
-func (c *collector) Close() {
-	if c.rd != nil {
-		c.rd.Close()
-	}
-	if c.link != nil {
-		c.link.Close()
-	}
-	if c.coll != nil {
-		c.coll.Close()
-	}
 }
