@@ -75,7 +75,7 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("get project root: %w", err)
 	}
-	obj := filepath.Join(root, "xdpcollector", "xdp_prog.o")
+	obj := filepath.Join(root, "xdpcollector", "bpf", "xdp_prog.o")
 
 	// Load & create collection
 	spec, err := ebpf.LoadCollectionSpec(obj)
