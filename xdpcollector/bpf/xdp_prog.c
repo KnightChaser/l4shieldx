@@ -57,7 +57,7 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
     update_percpu_stats(ctx, data_end, index);
 
     if (index == TRAFFIC_DENIED) {
-        // TODO: Delte bpf_prink() after testing
+        // TODO: Delete bpf_prink() after testing
         bpf_printk("Blocked IP: %pI4\n", ip->saddr);
         return XDP_DROP;
     }
