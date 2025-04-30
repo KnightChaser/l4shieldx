@@ -1,0 +1,6 @@
+-Ixdpcollector/bpf
+-D__TARGET_ARCH_x86
+-D__BPF_TRACING__
+-D__KERNEL__
+--target=bpf
+

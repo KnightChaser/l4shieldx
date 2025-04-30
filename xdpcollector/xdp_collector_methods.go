@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"l4shieldx/ui"
@@ -49,6 +50,12 @@ func (c *collector) Run(ctx context.Context) error {
 				// Send TrafficStat structs to UI
 				c.allowChan <- utility.TrafficStat{Pkts: allowPkts, Bytes: allowBytes}
 				c.denyChan <- utility.TrafficStat{Pkts: denyPkts, Bytes: denyBytes}
+
+				// Sweep & reset per-IP counts (every ticker)
+				if err := c.flushIPCounts(MaxReqsPerSecond); err != nil {
+					c.sysChan <- fmt.Sprintf("[flusher] error: %v", err.Error())
+				}
+
 			}
 		}
 	})
@@ -139,6 +146,30 @@ func (c *collector) Block(ip net.IP) error {
 func (c *collector) Unblock(ip net.IP) error {
 	key := binary.BigEndian.Uint32(ip.To4())
 	return c.blocked.Delete(key)
+}
+
+// SetThreshold sets the rate limit threshold for the eBPF program.
+func (c *collector) SetThreshold(threshold uint64) {
+	old := atomic.SwapUint64(&c.threshold, threshold)
+	c.sysChan <- fmt.Sprintf("[xdp] threshold changed from %d pkts/sec to %d pkts/sec", old, threshold)
+}
+
+// flushIPCounts resets the per-IP counts in the eBPF map.
+func (c *collector) flushIPCounts(maxReqsPerSecond uint64) error {
+	mapIterator := c.ipCountMap.Iterate()
+	threshold := atomic.LoadUint64(&c.threshold)
+	var key uint32
+	var count uint64
+	for mapIterator.Next(&key, &count) {
+		if count > threshold {
+			ip := make(net.IP, 4)
+			binary.BigEndian.PutUint32(ip, key)
+			c.blocked.Update(key, uint8(1), ebpf.UpdateAny)
+			c.sysChan <- fmt.Sprintf("[flusher] blocked %s (%d/%d pkts/sec)", ip, count, threshold)
+		}
+		c.ipCountMap.Delete(key)
+	}
+	return mapIterator.Err()
 }
 
 // Close cleans up the ring buffer, link, and collection.
