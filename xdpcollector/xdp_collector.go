@@ -33,16 +33,17 @@ type Collector interface {
 }
 
 type collector struct {
-	iface     string
-	coll      *ebpf.Collection
-	link      link.Link
-	rd        *ringbuf.Reader
-	buf       bytes.Buffer               // for binary.Read
-	sysChan   chan<- string              // formatted system messages
-	netChan   chan<- string              // formatted event strings
-	allowChan chan<- utility.TrafficStat // formatted allowed traffic stats
-	denyChan  chan<- utility.TrafficStat // formatted denied traffic stats
-	blocked   *ebpf.Map                  // blocklist map
+	iface      string
+	coll       *ebpf.Collection
+	link       link.Link
+	rd         *ringbuf.Reader
+	buf        bytes.Buffer               // for binary.Read
+	sysChan    chan<- string              // formatted system messages
+	netChan    chan<- string              // formatted event strings
+	allowChan  chan<- utility.TrafficStat // formatted allowed traffic stats
+	denyChan   chan<- utility.TrafficStat // formatted denied traffic stats
+	ipCountMap *ebpf.Map                  // per-CPU map for IP count
+	blocked    *ebpf.Map                  // blocklist map
 }
 
 // New loads the eBPF program (xdp_prog.o), attaches it to ifaceName,
@@ -107,6 +108,14 @@ func New(
 		return nil, fmt.Errorf("ringbuf reader: %w", err)
 	}
 
+	// Ensure ip_count map exists
+	ipCountMap := coll.Maps["ip_count_map"]
+	if ipCountMap == nil {
+		lnk.Close()
+		coll.Close()
+		return nil, fmt.Errorf("ip_count_map not found")
+	}
+
 	// Ensure blocked_ips map exists
 	blockedMap := coll.Maps["blocked_ips"]
 	if blockedMap == nil {
@@ -116,15 +125,16 @@ func New(
 	}
 
 	return &collector{
-		iface:     ifaceName,
-		coll:      coll,
-		link:      lnk,
-		rd:        rd,
-		buf:       bytes.Buffer{},
-		sysChan:   sysChan,
-		netChan:   netChan,
-		allowChan: allowChan,
-		denyChan:  denyChan,
-		blocked:   blockedMap,
+		iface:      ifaceName,
+		coll:       coll,
+		link:       lnk,
+		rd:         rd,
+		buf:        bytes.Buffer{},
+		sysChan:    sysChan,
+		netChan:    netChan,
+		allowChan:  allowChan,
+		denyChan:   denyChan,
+		ipCountMap: ipCountMap,
+		blocked:    blockedMap,
 	}, nil
 }

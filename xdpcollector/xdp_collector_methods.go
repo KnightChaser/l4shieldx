@@ -49,6 +49,12 @@ func (c *collector) Run(ctx context.Context) error {
 				// Send TrafficStat structs to UI
 				c.allowChan <- utility.TrafficStat{Pkts: allowPkts, Bytes: allowBytes}
 				c.denyChan <- utility.TrafficStat{Pkts: denyPkts, Bytes: denyBytes}
+
+				// Sweep & reset per-IP counts (every ticker)
+				if err := c.flushIPCounts(MaxReqsPerSecond); err != nil {
+					c.sysChan <- fmt.Sprintf("[flusher] error: %v", err)
+				}
+
 			}
 		}
 	})
@@ -139,6 +145,28 @@ func (c *collector) Block(ip net.IP) error {
 func (c *collector) Unblock(ip net.IP) error {
 	key := binary.BigEndian.Uint32(ip.To4())
 	return c.blocked.Delete(key)
+}
+
+// flushIPCounts resets the per-IP counts in the eBPF map.
+func (c *collector) flushIPCounts(maxReqsPerSecond uint64) error {
+	mapIterator := c.ipCountMap.Iterate()
+	var key uint32
+	var count uint64
+
+	for mapIterator.Next(&key, &count) {
+		// If threshold exceeds, add to blocklist
+		if count > maxReqsPerSecond {
+			ip := make(net.IP, 4)
+			binary.BigEndian.PutUint32(ip, key)
+			c.blocked.Update(key, uint8(1), ebpf.UpdateAny)
+			c.sysChan <- fmt.Sprintf("[flusher] blocked %s (count: %d)", ip, count)
+		}
+
+		if err := c.ipCountMap.Delete(key); err != nil {
+			c.sysChan <- fmt.Sprintf("[flusher] error deleting %s: %v", key, err)
+		}
+	}
+	return mapIterator.Err()
 }
 
 // Close cleans up the ring buffer, link, and collection.

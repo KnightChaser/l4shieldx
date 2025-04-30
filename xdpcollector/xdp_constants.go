@@ -1,4 +1,4 @@
-// xdpcollector/xdp_event.go
+// xdpcollector/xdp_constants.go
 package xdpcollector
 
 // Event mirrors the C struct emitted by the XDP program.
@@ -17,4 +17,9 @@ type Event struct {
 const (
 	TRAFFIC_ALLOWED = 0
 	TRAFFIC_DENIED  = 1
+)
+
+// DDoS prevention logic configuration constants
+const (
+	MaxReqsPerSecond = 500
 )
