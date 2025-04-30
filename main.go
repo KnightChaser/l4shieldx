@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"l4shieldx/ui"
@@ -58,25 +57,29 @@ func main() {
 		if key != tcell.KeyEnter {
 			return
 		}
-		text := input.GetText()
-		cmd, err := utility.ParseCommand(text)
+		cmd, err := utility.ParseCommand(input.GetText())
 		if err != nil {
-			sysChan <- fmt.Sprintf("[ERROR] %v", err)
+			sysChan <- "[ERROR] " + err.Error()
 		} else {
-			var opErr error
 			switch cmd.Op {
 			case utility.OpDeny:
-				opErr = coll.Block(cmd.IP)
-			case utility.OpAllow:
-				opErr = coll.Unblock(cmd.IP)
-			}
+				err = coll.Block(cmd.IP)
+				msg := "[SYS] deny " + cmd.IP.String()
+				if err != nil {
+					msg += " failed: " + err.Error()
+				}
+				sysChan <- msg
 
-			if opErr != nil {
-				sysChan <- fmt.Sprintf("[ERROR] %s %s failed: %v",
-					cmd.Op, cmd.IP, opErr)
-			} else {
-				sysChan <- fmt.Sprintf("[SYS] %s %s succeeded",
-					strings.ToUpper(cmd.Op.String()), cmd.IP)
+			case utility.OpAllow:
+				err = coll.Unblock(cmd.IP)
+				msg := "[SYS] allow " + cmd.IP.String()
+				if err != nil {
+					msg += " failed: " + err.Error()
+				}
+				sysChan <- msg
+
+			case utility.OpSetThreshold:
+				coll.SetThreshold(cmd.Value)
 			}
 		}
 		input.SetText("")

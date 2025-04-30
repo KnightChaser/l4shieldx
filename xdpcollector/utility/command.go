@@ -4,6 +4,7 @@ package utility
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -11,54 +12,46 @@ import (
 type Opcode int
 
 const (
-	OpDeny  Opcode = iota + 1 // drop matching traffic
-	OpAllow                   // allow matching traffic
+	OpDeny         Opcode = iota + 1 // drop matching traffic
+	OpAllow                          // allow matching traffic
+	OpSetThreshold                   // set threshold for rate limiting
 )
 
-// String returns a string representation of the Opcode.
-func (o Opcode) String() string {
-	switch o {
-	case OpDeny:
-		return "deny"
-	case OpAllow:
-		return "allow"
-	default:
-		return "unknown"
-	}
-}
-
-// Command encapsulates a parsed user command.
 type Command struct {
-	Op Opcode // Opcode to apply (e.g. OpDeny, OpAllow)
-	IP net.IP // IPv4 address to apply the operation(Op) to
+	Op    Opcode
+	IP    net.IP // for deny/allow
+	Value uint64 // for setThreshold
 }
 
-// ParseCommand validates and parses an input string of the form
-//
-//	"deny <IPv4>" or "allow <IPv4>"
-//
-// Returns a Command with the appropriate Opcode and IP, or an error.
 func ParseCommand(input string) (*Command, error) {
-	text := strings.TrimSpace(input)
-	parts := strings.Fields(text)
+	parts := strings.Fields(strings.TrimSpace(input))
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid command format: %q, expected 'deny <IP>' or 'allow <IP>'", text)
+		return nil, fmt.Errorf("invalid command %q", input)
 	}
 
-	var op Opcode
 	switch parts[0] {
 	case "deny":
-		op = OpDeny
+		ip := net.ParseIP(parts[1]).To4()
+		if ip == nil {
+			return nil, fmt.Errorf("bad IP %q", parts[1])
+		}
+		return &Command{Op: OpDeny, IP: ip}, nil
+
 	case "allow":
-		op = OpAllow
+		ip := net.ParseIP(parts[1]).To4()
+		if ip == nil {
+			return nil, fmt.Errorf("bad IP %q", parts[1])
+		}
+		return &Command{Op: OpAllow, IP: ip}, nil
+
+	case "setThreshold":
+		v, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil || v == 0 {
+			return nil, fmt.Errorf("invalid threshold %q", parts[1])
+		}
+		return &Command{Op: OpSetThreshold, Value: v}, nil
+
 	default:
-		return nil, fmt.Errorf("unknown command %q, expected 'deny' or 'allow'", parts[0])
+		return nil, fmt.Errorf("unknown op %q", parts[0])
 	}
-
-	ip := net.ParseIP(parts[1]).To4()
-	if ip == nil {
-		return nil, fmt.Errorf("invalid IPv4 address: %q", parts[1])
-	}
-
-	return &Command{Op: op, IP: ip}, nil
 }
