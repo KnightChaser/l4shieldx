@@ -159,7 +159,7 @@ func (c *collector) flushIPCounts(maxReqsPerSecond uint64) error {
 			ip := make(net.IP, 4)
 			binary.BigEndian.PutUint32(ip, key)
 			c.blocked.Update(key, uint8(1), ebpf.UpdateAny)
-			c.sysChan <- fmt.Sprintf("[flusher] blocked %s (count: %d)", ip, count)
+			c.sysChan <- fmt.Sprintf("[flusher] blocked %s (count: %d/%d pkts/sec)", ip, count, maxReqsPerSecond)
 		}
 
 		if err := c.ipCountMap.Delete(key); err != nil {
