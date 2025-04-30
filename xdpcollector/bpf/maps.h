@@ -40,4 +40,12 @@ struct {
     __uint(max_entries, 1 << 16);
 } events SEC(".maps");
 
+/* per-source-IP access counter */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 10240);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(__u64));
+} ip_count_map SEC(".maps");
+
 #endif /* MAPS_H */

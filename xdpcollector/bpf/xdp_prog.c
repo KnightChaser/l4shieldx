@@ -30,10 +30,26 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
+    // Update the per-source-IP access counter for accounting
+    __u32 key = ip->saddr;
+    __u64 *packetCount = bpf_map_lookup_elem(&ip_count_map, &key);
+    if (packetCount) {
+        __sync_fetch_and_add(packetCount, 1);
+    } else {
+        // If the key doesn't exist, initialize it to 1
+        __u64 inititalValue = 1;
+        bpf_map_update_elem(&ip_count_map, &key, &inititalValue, BPF_ANY);
+        packetCount = bpf_map_lookup_elem(&ip_count_map, &key);
+    }
+
+    if (packetCount) {
+        bpf_printk("Packet count for IP %u: %llu\n", key, *packetCount);
+    }
+
+    // Enforce block list policy
     __u32 src = bpf_ntohl(ip->saddr);
     __u8 *blocked = bpf_map_lookup_elem(&blocked_ips, &src);
 
-    // choose counter index
     index = (blocked && *blocked) ? TRAFFIC_DENIED : TRAFFIC_ALLOWED;
 
     // increment packet count for this index
@@ -72,4 +88,3 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
 
     return XDP_PASS;
 }
-
