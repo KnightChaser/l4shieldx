@@ -6,9 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"l4shieldx/ui"
@@ -19,60 +17,13 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// selectInterface prompts the user to select a network interface from the available ones
-func selectInterface() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		log.Fatalf("Failed to get network interfaces: %v", err)
-	}
-
-	fmt.Println("Select a network interface: ")
-	valid := make([]string, 0)
-
-	// Iterate over network interfaces and print their names and addresses
-	for _, iface := range ifaces {
-		// Skips ones that are down or have no addresses
-		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
-			continue
-		}
-
-		addrs, _ := iface.Addrs()
-		addrStrs := make([]string, 0, len(addrs))
-		for _, addr := range addrs {
-			if ipNet, ok := addr.(*net.IPNet); ok {
-				addrStrs = append(addrStrs, ipNet.IP.String())
-			}
-		}
-
-		fmt.Printf("  [%d] %s (%s)\n", len(valid), iface.Name, strings.Join(addrStrs, ", "))
-		valid = append(valid, iface.Name)
-	}
-
-	if len(valid) == 0 {
-		log.Fatal("No valid network interfaces found")
-	}
-
-	// Prompt user for selection
-	var choice int
-	for {
-		fmt.Print("Enter the number of the interface you want to use: ")
-		_, err := fmt.Scanf("%d", &choice)
-		if err == nil && choice >= 0 && choice < len(valid) {
-			break
-		}
-		fmt.Println("Invalid input. Try again.")
-	}
-
-	return valid[choice]
-}
-
 func main() {
 	// Set up command line flags
 	var iface string
 	flag.StringVar(&iface, "iface", "", "Network interface to use (default: prompt for selection)")
 	flag.Parse()
 	if iface == "" {
-		iface = selectInterface()
+		iface = ui.SelectNetworkInterface()
 	}
 
 	// Create channels for communication
