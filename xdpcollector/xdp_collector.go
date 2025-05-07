@@ -1,4 +1,4 @@
-// xdpcollector/collector.go
+// xdpcollector/xdp_collector.go
 package xdpcollector
 
 import (
@@ -18,6 +18,10 @@ import (
 
 // Collector runs the XDP program, enforces blocklist, and emits events/stats.
 type Collector interface {
+	// AddPID adds a process to the cgroup so its sockets get filtered.
+	AddPID(pid int) error
+	// RemovePID removes a process from the cgroup so its sockets get filtered.
+	RemovePID(pid int) error
 	// Run attaches XDP, consumes events, and pumps stats until ctx cancellation.
 	Run(ctx context.Context) error
 	// Close tears down XDP and frees resources.
@@ -35,18 +39,20 @@ type Collector interface {
 }
 
 type collector struct {
-	iface      string
-	coll       *ebpf.Collection
-	link       link.Link
-	rd         *ringbuf.Reader
-	buf        bytes.Buffer               // for binary.Read
-	sysChan    chan<- string              // formatted system messages
-	netChan    chan<- string              // formatted event strings
-	allowChan  chan<- utility.TrafficStat // formatted allowed traffic stats
-	denyChan   chan<- utility.TrafficStat // formatted denied traffic stats
-	ipCountMap *ebpf.Map                  // per-CPU map for IP count
-	blocked    *ebpf.Map                  // blocklist map
-	threshold  uint64                     // rate limit threshold (X pkts/sec)
+	iface         string
+	coll          *ebpf.Collection
+	link          link.Link
+	cgroupLink    link.Link                   // cgroup link for the process
+	cgroupManager *utility.LinuxCgroupManager // cgroup manager for the process
+	rd            *ringbuf.Reader
+	buf           bytes.Buffer               // for binary.Read
+	sysChan       chan<- string              // formatted system messages
+	netChan       chan<- string              // formatted event strings
+	allowChan     chan<- utility.TrafficStat // formatted allowed traffic stats
+	denyChan      chan<- utility.TrafficStat // formatted denied traffic stats
+	ipCountMap    *ebpf.Map                  // per-CPU map for IP count
+	blocked       *ebpf.Map                  // blocklist map
+	threshold     uint64                     // rate limit threshold (X pkts/sec)
 }
 
 // New loads the eBPF program (xdp_prog.o), attaches it to ifaceName,
@@ -92,9 +98,9 @@ func New(
 	}
 
 	// Attach XDP
-	prog := coll.Programs["xdp_tcp_hello"]
-	lnk, err := link.AttachXDP(link.XDPOptions{
-		Program:   prog,
+	xdpProg := coll.Programs["xdp_tcp_hello"]
+	xdpLink, err := link.AttachXDP(link.XDPOptions{
+		Program:   xdpProg,
 		Interface: iface.Index,
 		Flags:     link.XDPGenericMode,
 	})
@@ -106,15 +112,45 @@ func New(
 	// Prepare ring buffer reader for Event structs
 	rd, err := ringbuf.NewReader(coll.Maps["events"])
 	if err != nil {
-		lnk.Close()
+		xdpLink.Close()
 		coll.Close()
 		return nil, fmt.Errorf("ringbuf reader: %w", err)
+	}
+
+	// Initialize cgroup manager
+	cg := utility.NewCgroupManager("/sys/fs/cgroup", "l4shieldx")
+	if err := cg.Init(); err != nil {
+		xdpLink.Close()
+		coll.Close()
+		return nil, fmt.Errorf("cgroup init: %w", err)
+	}
+
+	// Create cgroup for the process and attach it to the XDP program
+	cgProg := coll.Programs["cgroup_tcp_hello"]
+	if cgProg == nil {
+		xdpLink.Close()
+		cg.Destroy()
+		coll.Close()
+		return nil, fmt.Errorf("cgroup_sk_ingress program not found")
+	}
+
+	cgLink, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    cg.Path(),
+		Program: cgProg,
+		Attach:  ebpf.AttachCGroupInetIngress,
+	})
+
+	if err != nil {
+		xdpLink.Close()
+		cg.Destroy()
+		coll.Close()
+		return nil, fmt.Errorf("attach cgroup: %w", err)
 	}
 
 	// Ensure ip_count map exists
 	ipCountMap := coll.Maps["ip_count_map"]
 	if ipCountMap == nil {
-		lnk.Close()
+		xdpLink.Close()
 		coll.Close()
 		return nil, fmt.Errorf("ip_count_map not found")
 	}
@@ -122,7 +158,7 @@ func New(
 	// Ensure blocked_ips map exists
 	blockedMap := coll.Maps["blocked_ips"]
 	if blockedMap == nil {
-		lnk.Close()
+		xdpLink.Close()
 		coll.Close()
 		return nil, fmt.Errorf("blocked_ips map not found")
 	}
@@ -132,17 +168,19 @@ func New(
 	sysChan <- fmt.Sprintf("[collector] default threshold set to %d pkts/sec", defaultThreshold)
 
 	return &collector{
-		iface:      ifaceName,
-		coll:       coll,
-		link:       lnk,
-		rd:         rd,
-		buf:        bytes.Buffer{},
-		sysChan:    sysChan,
-		netChan:    netChan,
-		allowChan:  allowChan,
-		denyChan:   denyChan,
-		ipCountMap: ipCountMap,
-		blocked:    blockedMap,
-		threshold:  defaultThreshold,
+		iface:         ifaceName,
+		coll:          coll,
+		link:          xdpLink,
+		cgroupLink:    cgLink,
+		cgroupManager: cg,
+		rd:            rd,
+		buf:           bytes.Buffer{},
+		sysChan:       sysChan,
+		netChan:       netChan,
+		allowChan:     allowChan,
+		denyChan:      denyChan,
+		ipCountMap:    ipCountMap,
+		blocked:       blockedMap,
+		threshold:     defaultThreshold,
 	}, nil
 }

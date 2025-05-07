@@ -9,7 +9,9 @@
 #include <bpf/bpf_helpers.h>
 
 /**
- * parse_tcp - parse L2/L3/L4 headers and ensure packet is TCP over IPv4
+ * Parses L2/L3/L4 headers and ensure packet is TCP over IPv4
+ * For XDP context
+ *
  * @ctx:   XDP context (contains data pointers)
  * @data_end: pointer to store packet end
  * @eth:   pointer to store Ethernet header pointer
@@ -18,32 +20,83 @@
  *
  * Returns true if packet is IPv4+TCP and all headers are within bounds.
  */
-static __always_inline bool parse_tcp(struct xdp_md *ctx, void **data_end,
-                                      struct ethhdr **eth, struct iphdr **ip,
-                                      struct tcphdr **tcp) {
-    // Load packet bounds
+static __always_inline bool parse_xdp_tcp(struct xdp_md *ctx, void **data_end,
+                                          struct ethhdr **eth,
+                                          struct iphdr **ip,
+                                          struct tcphdr **tcp) {
+    /* Load packet bounds */
     void *data = (void *)(long)ctx->data;
     *data_end = (void *)(long)ctx->data_end;
 
-    // L2: Ethernet
+    /* L2: Ethernet */
     *eth = (struct ethhdr *)data;
-    if ((void *)(*eth + 1) > *data_end)
+    if ((void *)(*eth + 1) > *data_end) {
         return false;
-    if (bpf_ntohs((*eth)->h_proto) != ETH_P_IP)
+    }
+    if (bpf_ntohs((*eth)->h_proto) != ETH_P_IP) {
         return false;
+    }
 
-    // L3: IPv4
+    /* L3: IPv4 */
     *ip = (struct iphdr *)(*eth + 1);
-    if ((void *)(*ip + 1) > *data_end)
+    if ((void *)(*ip + 1) > *data_end) {
         return false;
-    if ((*ip)->protocol != IPPROTO_TCP)
+    }
+    if ((*ip)->protocol != IPPROTO_TCP) {
         return false;
+    }
 
-    // L4: TCP
+    /* L4: TCP */
     *tcp = (void *)*ip + (*ip)->ihl * 4;
-    if ((void *)(*tcp + 1) > *data_end)
+    if ((void *)(*tcp + 1) > *data_end) {
         return false;
+    }
 
+    return true;
+}
+
+/**
+ * For SKB(socket buffer) context instead of XDP context,
+ * Parses L2/L3/L4 headers and ensure packet is TCP over IPv4
+ *
+ * @skb:   SKB context (contains data pointers)
+ * @data:  pointer to store packet start
+ * @data_end: pointer to store packet end
+ * @eth:   pointer to store Ethernet header pointer
+ * @ip:    pointer to store IP header pointer
+ * @tcp:   pointer to store TCP header pointer
+ *
+ * Returns true if packet is IPv4+TCP and all headers are within bounds.
+ */
+static __always_inline bool parse_skb_tcp(struct __sk_buff *skb, void **data,
+                                          void **data_end, struct ethhdr *eth,
+                                          struct iphdr *ip, struct tcphdr *tcp,
+                                          __u64 *pkt_len) {
+    /* Load ethernet(L2) header into stack */
+    struct ethhdr eth_buf;
+    if (bpf_skb_load_bytes(skb, 0, &eth_buf, sizeof(eth_buf)) < 0 ||
+        eth->h_proto != bpf_htons(ETH_P_IP)) {
+        return false;
+    }
+
+    /* Load IP(L3) header */
+    struct iphdr ip_buf;
+    __u32 ip_off = sizeof(eth_buf);
+    if (bpf_skb_load_bytes(skb, ip_off, &ip_buf, sizeof(ip_buf)) < 0 ||
+        ip_buf.protocol != IPPROTO_TCP) {
+        return false;
+    }
+
+    /* Load TCP(L4) header */
+    __u32 tcp_off = ip_off + (ip_buf.ihl * 4);
+    struct tcphdr tcp_buf;
+    if (bpf_skb_load_bytes(skb, tcp_off, &tcp_buf, sizeof(tcp_buf)) < 0) {
+        return false;
+    }
+
+    *pkt_len = skb->len;
+    *data = (void *)(long)skb->data;
+    *data_end = (void *)(long)skb->data_end;
     return true;
 }
 

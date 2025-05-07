@@ -172,6 +172,16 @@ func (c *collector) flushIPCounts(maxReqsPerSecond uint64) error {
 	return mapIterator.Err()
 }
 
+// AddPID adds the current process ID to the cgroup.
+func (c *collector) AddPID(pid int) error {
+	return c.cgroupManager.AddPID(pid)
+}
+
+// RemovePID removes the current process ID from the cgroup.
+func (c *collector) RemovePID(pid int) error {
+	return c.cgroupManager.RemovePID(pid)
+}
+
 // Close cleans up the ring buffer, link, and collection.
 func (c *collector) Close() {
 	if c.rd != nil {
@@ -179,6 +189,12 @@ func (c *collector) Close() {
 	}
 	if c.link != nil {
 		c.link.Close()
+	}
+	if c.cgroupLink != nil {
+		c.cgroupLink.Close()
+	}
+	if c.cgroupManager != nil {
+		c.cgroupManager.Destroy()
 	}
 	if c.coll != nil {
 		c.coll.Close()
