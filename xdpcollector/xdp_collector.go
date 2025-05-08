@@ -31,6 +31,12 @@ type Collector interface {
 	Block(ip net.IP) error
 	// Unblock removes ip from the blocked_ips map.
 	Unblock(ip net.IP) error
+	// Protect adds a process to the cgroup so its sockets get filtered.
+	Protect(pid int) error
+	// Unprotect removes a process from the cgroup so its sockets get filtered.
+	Unprotect(pid int) error
+	// ShowProtected lists all processes in the cgroup.
+	ShowProtected() ([]int, error)
 	// SetThreshold sets the rate limit threshold (X pkts/sec).
 	SetThreshold(threshold uint64)
 

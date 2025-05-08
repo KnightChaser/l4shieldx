@@ -9,6 +9,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -146,6 +150,50 @@ func (c *collector) Block(ip net.IP) error {
 func (c *collector) Unblock(ip net.IP) error {
 	key := binary.BigEndian.Uint32(ip.To4())
 	return c.blocked.Delete(key)
+}
+
+// Protect adds the current process ID to the cgroup.
+func (c *collector) Protect(pid int) error {
+	if c.cgroupManager == nil {
+		return fmt.Errorf("cgroup manager is not initialized")
+	}
+	if err := c.cgroupManager.AddPID(pid); err != nil {
+		return fmt.Errorf("failed to add PID %d to cgroup: %w", pid, err)
+	}
+	c.sysChan <- fmt.Sprintf("[xdp] process %d added to cgroup", pid)
+	return nil
+}
+
+// Unprotect removes the current process ID from the cgroup.
+func (c *collector) Unprotect(pid int) error {
+	if c.cgroupManager == nil {
+		return fmt.Errorf("cgroup manager is not initialized")
+	}
+	if err := c.cgroupManager.RemovePID(pid); err != nil {
+		return fmt.Errorf("failed to remove PID %d from cgroup: %w", pid, err)
+	}
+	c.sysChan <- fmt.Sprintf("[xdp] process %d removed from cgroup", pid)
+	return nil
+}
+
+// ShowProtected lists all processes in the cgroup.
+func (c *collector) ShowProtected() ([]int, error) {
+	procsFile := filepath.Join(c.cgroupManager.Path(), "cgroup.procs")
+	data, err := os.ReadFile(procsFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cgroup.procs: %w", err)
+	}
+	parts := strings.Fields(string(data))
+	var pids []int
+	for _, p := range parts {
+		pid, err := strconv.Atoi(p)
+		if err != nil {
+			// Skip bad lines
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	return pids, nil
 }
 
 // SetThreshold sets the rate limit threshold for the eBPF program.
