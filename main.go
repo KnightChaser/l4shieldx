@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"l4shieldx/ui"
@@ -59,31 +61,74 @@ func main() {
 		if key != tcell.KeyEnter {
 			return
 		}
-		cmd, err := utility.ParseCommand(input.GetText())
+		text := strings.TrimSpace(input.GetText())
+		cmd, err := utility.ParseCommand(text)
 		if err != nil {
 			sysChan <- "[ERROR] " + err.Error()
 		} else {
 			switch cmd.Op {
+
 			case utility.OpDeny:
+				// Block the traffic from the specified IP
 				err = coll.Block(cmd.IP)
-				msg := "[SYS] deny " + cmd.IP.String()
+				msg := fmt.Sprintf("[SYS] deny %s", cmd.IP)
 				if err != nil {
 					msg += " failed: " + err.Error()
 				}
 				sysChan <- msg
 
 			case utility.OpAllow:
+				// Unblock the traffic from the specified IP
 				err = coll.Unblock(cmd.IP)
-				msg := "[SYS] allow " + cmd.IP.String()
+				msg := fmt.Sprintf("[SYS] allow %s", cmd.IP)
 				if err != nil {
 					msg += " failed: " + err.Error()
 				}
 				sysChan <- msg
 
 			case utility.OpSetThreshold:
+				// Set the threshold for allowed/denied packets
+				// (e.g. set threshold 1000 packets per second)
 				coll.SetThreshold(cmd.Value)
+
+			case utility.OpProtect:
+				// Protect the specified PID with XDP threshold
+				// (Add the PID to the cgroup)
+				err = coll.Protect(cmd.Pid)
+				if err != nil {
+					sysChan <- fmt.Sprintf("[SYS] protect %d failed: %v", cmd.Pid, err)
+				}
+
+			case utility.OpUnprotect:
+				// Unprotect the specified PID
+				// (Remove the PID from the cgroup)
+				err = coll.Unprotect(cmd.Pid)
+				if err != nil {
+					sysChan <- fmt.Sprintf("[SYS] unprotect %d failed: %v", cmd.Pid, err)
+				}
+
+			case utility.OpShowProtected:
+				// Show the list of protected PIDs
+				// (Show the PIDs in the cgroup)
+				pids, err := coll.ShowProtected()
+				if err != nil {
+					sysChan <- "[SYS] error listing protected: " + err.Error()
+				} else if len(pids) == 0 {
+					sysChan <- "[SYS] no protected PIDs"
+				} else {
+					parts := make([]string, len(pids))
+					for i, pid := range pids {
+						parts[i] = strconv.Itoa(pid)
+					}
+					sysChan <- "[SYS] protected PIDs: " + strings.Join(parts, ", ")
+				}
+
+			default:
+				// Unsupported command
+				sysChan <- "[ERROR] unsupported command: " + text
 			}
 		}
+
 		input.SetText("")
 		app.SetFocus(input)
 	})
