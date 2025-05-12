@@ -64,6 +64,7 @@ static __always_inline int common_core(__u32 saddr, __u32 daddr,
                                        bool is_xdp, struct xdp_md *ctx,
                                        void *data_end, __u64 skb_len) {
     if (idx == TRAFFIC_DENIED) {
+        /* TODO: Delete bpf_printk() after debugging */
         bpf_printk("Blocked IP: %pI4\n", &saddr);
         return is_xdp ? XDP_DROP : SK_DROP;
     }
@@ -92,6 +93,7 @@ static __always_inline int common_core(__u32 saddr, __u32 daddr,
 
 /**
  * XDP program to handle TCP packets.
+ * It actually drops packets from the blacklist. (policy enforcement)
  *
  * @ctx: XDP context (data pointers, etc.)
  *
@@ -123,6 +125,7 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
 
 /**
  * SKB program to handle TCP packets.
+ * It counts packets and logs events for protected cgroups. (detection)
  *
  * @skb: SKB context (data pointers, etc.)
  */
@@ -132,21 +135,18 @@ int cgroup_tcp_hello(struct __sk_buff *skb) {
     struct ethhdr eth;
     struct iphdr ip;
     struct tcphdr tcp;
-    __u64 pkt_len;
+    __u64 pkt_len = skb->len;
 
-    /*
-     * Parse from SKB context.
-     * If parsing fails(Not a TCP packet), just pass it up the stack.
-     **/
+    /* Only process the packet TCP/IPv4; Otherwise; pass through */
     if (!parse_skb_tcp(skb, &data, &data_end, &eth, &ip, &tcp, &pkt_len)) {
         return SK_PASS;
     }
 
-    __u32 saddr = bpf_ntohl(ip.saddr);
-    __u32 daddr = bpf_ntohl(ip.daddr);
-    __u8 *blocked = bpf_map_lookup_elem(&blocked_ips, &saddr);
-    __u32 idx = (blocked && *blocked) ? TRAFFIC_DENIED : TRAFFIC_ALLOWED;
+    __u32 saddr = ip.saddr;
+    __u32 daddr = ip.daddr;
 
-    update_percpu_stats_skb(idx, pkt_len);
-    return common_core(saddr, daddr, &tcp, idx, false, NULL, data_end, pkt_len);
+    /* Count and log; always treat as allowed here */
+    update_percpu_stats_skb(TRAFFIC_ALLOWED, pkt_len);
+    return common_core(saddr, daddr, &tcp, TRAFFIC_ALLOWED, false, NULL,
+                       data_end, pkt_len);
 }
