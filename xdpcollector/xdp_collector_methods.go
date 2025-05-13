@@ -192,6 +192,14 @@ func (c *collector) Protect(pid int32) error {
 		if err := bp.Update(port, one, ebpf.UpdateAny); err != nil {
 			return fmt.Errorf("failed to update protected_ports map: %w", err)
 		}
+
+		// Also add to the protectedMap
+		if _, ok := c.protectedMap[pid]; !ok {
+			c.protectedMap[pid] = []uint16{}
+		}
+		c.protectedMap[pid] = append(c.protectedMap[pid], port)
+
+		c.sysChan <- fmt.Sprintf("[protect] PID %d(port: %v) was added to the protection list", pid, port)
 	}
 
 	return nil
@@ -204,6 +212,7 @@ func (c *collector) Unprotect(pid int32) error {
 		return fmt.Errorf("Unprotect: PID %d not protected", pid)
 	}
 
+	// Remove the ports from the protected_ports BPF map
 	bp := c.coll.Maps["protected_ports"]
 	for _, port := range ports {
 		if err := bp.Delete(port); err != nil {
@@ -211,9 +220,21 @@ func (c *collector) Unprotect(pid int32) error {
 		}
 	}
 
+	// Remove the PID from the protectedMap
 	delete(c.protectedMap, pid)
-	c.sysChan <- fmt.Sprintf("[unprotect] PID %d cleared (%v)", pid, ports)
+	c.sysChan <- fmt.Sprintf("[unprotect] PID %d(port: %v) was removed from protection list", pid, ports)
+
+	// Remove the PID from the protectedMap
+	if _, ok := c.protectedMap[pid]; ok {
+		delete(c.protectedMap, pid)
+	}
+
 	return nil
+}
+
+// ShowProtected returns the list of protected ports for a given PID.
+func (c *collector) ShowProtected() map[int32][]uint16 {
+	return c.protectedMap
 }
 
 // flushIPCounts resets the per-IP counts in the eBPF map.

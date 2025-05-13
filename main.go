@@ -94,6 +94,17 @@ func main() {
 				}
 				sysChan <- msg
 
+			case utility.OpShowProtected:
+				// "showProtected" displays the protected PID and their ports
+				protected := coll.ShowProtected()
+				if len(protected) == 0 {
+					sysChan <- "[SYS] No protected PIDs"
+				} else {
+					for pid, ports := range protected {
+						sysChan <- fmt.Sprintf("[SYS] PID %d -> %v", pid, ports)
+					}
+				}
+
 			case utility.OpSetThreshold:
 				// "setThreshold" is followed by a number
 				coll.SetThreshold(cmd.Value)

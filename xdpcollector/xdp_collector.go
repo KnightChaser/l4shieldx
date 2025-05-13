@@ -33,6 +33,8 @@ type Collector interface {
 	Unprotect(pid int32) error
 	// SetThreshold sets the rate limit threshold (X pkts/sec).
 	SetThreshold(threshold uint64)
+	// ShowProtectedPorts returns a map of PIDs and their protected ports.
+	ShowProtected() map[int32][]uint16
 
 	// Network stats returns: allowedPkts, allowedBytes, deniedPkts, deniedBytes.
 	Stats() (uint64, uint64, uint64, uint64, error)

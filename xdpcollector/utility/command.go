@@ -12,11 +12,12 @@ import (
 type Opcode int
 
 const (
-	OpDeny         Opcode = iota + 1 // drop matching traffic
-	OpAllow                          // allow matching traffic
-	OpSetThreshold                   // set threshold for rate limiting
-	OpProtect                        // start protecting the PID's port
-	OpUnprotect                      // stop protecting the PID's port
+	OpDeny          Opcode = iota + 1 // drop matching traffic
+	OpAllow                           // allow matching traffic
+	OpSetThreshold                    // set threshold for rate limiting
+	OpProtect                         // start protecting the PID's port
+	OpUnprotect                       // stop protecting the PID's port
+	OpShowProtected                   // show protected PIDs and their ports
 )
 
 type Command struct {
@@ -28,10 +29,18 @@ type Command struct {
 
 func ParseCommand(input string) (*Command, error) {
 	parts := strings.Fields(strings.TrimSpace(input))
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid command %q", input)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("Empty command")
 	}
 
+	// Single-word commands
+	if len(parts) == 1 {
+		if parts[0] == "showProtected" {
+			return &Command{Op: OpShowProtected}, nil
+		}
+	}
+
+	// Two-word commands
 	switch parts[0] {
 	case "deny":
 		// "deny" is followed by an IP address
@@ -81,4 +90,6 @@ func ParseCommand(input string) (*Command, error) {
 	default:
 		return nil, fmt.Errorf("unknown op %q", parts[0])
 	}
+
+	return nil, fmt.Errorf("unknown command %q", input)
 }
