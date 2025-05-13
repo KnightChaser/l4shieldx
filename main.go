@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"os/signal"
@@ -18,12 +17,9 @@ import (
 )
 
 func main() {
-	iface := flag.String("iface", "", "network interface to attach XDP program to")
-	flag.Parse()
-
-	if *iface == "" {
-		log.Fatal("Error: -iface flag is required")
-	}
+	// Select network interface
+	var iface string
+	iface = ui.SelectNetworkInterface()
 
 	// Create channels for communication
 	sysChan := make(chan string, 200)
@@ -42,12 +38,12 @@ func main() {
 	}
 
 	// Initialize XDP Collector
-	coll, err := xdpcollector.New(*iface, sysChan, netChan, allowChan, denyChan)
+	coll, err := xdpcollector.New(iface, sysChan, netChan, allowChan, denyChan)
 
 	if err != nil {
 		log.Fatalf("Collector initialization failed: %v", err)
 	}
-	log.Printf("Starting XDP collector on interface %s", *iface)
+	log.Printf("Starting XDP collector on interface %s", iface)
 
 	// Setup UI
 	app, layout, sysView, netView, allowedView, deniedView, input := ui.SetupUI(sysChan)
