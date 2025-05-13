@@ -35,18 +35,19 @@ type Collector interface {
 }
 
 type collector struct {
-	iface      string
-	coll       *ebpf.Collection
-	link       link.Link
-	rd         *ringbuf.Reader
-	buf        bytes.Buffer               // for binary.Read
-	sysChan    chan<- string              // formatted system messages
-	netChan    chan<- string              // formatted event strings
-	allowChan  chan<- utility.TrafficStat // formatted allowed traffic stats
-	denyChan   chan<- utility.TrafficStat // formatted denied traffic stats
-	ipCountMap *ebpf.Map                  // per-CPU map for IP count
-	blocked    *ebpf.Map                  // blocklist map
-	threshold  uint64                     // rate limit threshold (X pkts/sec)
+	iface        string
+	coll         *ebpf.Collection
+	link         link.Link
+	rd           *ringbuf.Reader
+	buf          bytes.Buffer               // for binary.Read
+	sysChan      chan<- string              // formatted system messages
+	netChan      chan<- string              // formatted event strings
+	allowChan    chan<- utility.TrafficStat // formatted allowed traffic stats
+	denyChan     chan<- utility.TrafficStat // formatted denied traffic stats
+	ipCountMap   *ebpf.Map                  // per-CPU map for IP count
+	blocked      *ebpf.Map                  // blocklist map
+	threshold    uint64                     // rate limit threshold (X pkts/sec)
+	thresholdMap *ebpf.Map                  // map for threshold (Value threshold passed to eBPF via this)
 }
 
 // New loads the eBPF program (xdp_prog.o), attaches it to ifaceName,
@@ -127,22 +128,36 @@ func New(
 		return nil, fmt.Errorf("blocked_ips map not found")
 	}
 
+	// Ensure threshold map exists
+	thresholdMap := coll.Maps["threshold_map"]
+	if thresholdMap == nil {
+		lnk.Close()
+		coll.Close()
+		return nil, fmt.Errorf("threshold_map not found")
+	}
+
 	// Default packet threshold (1,000 pkts/sec)
 	defaultThreshold := uint64(1000)
+	if err := thresholdMap.Update(uint32(0), defaultThreshold, ebpf.UpdateAny); err != nil {
+		lnk.Close()
+		coll.Close()
+		return nil, fmt.Errorf("put threshold: %w", err)
+	}
 	sysChan <- fmt.Sprintf("[collector] default threshold set to %d pkts/sec", defaultThreshold)
 
 	return &collector{
-		iface:      ifaceName,
-		coll:       coll,
-		link:       lnk,
-		rd:         rd,
-		buf:        bytes.Buffer{},
-		sysChan:    sysChan,
-		netChan:    netChan,
-		allowChan:  allowChan,
-		denyChan:   denyChan,
-		ipCountMap: ipCountMap,
-		blocked:    blockedMap,
-		threshold:  defaultThreshold,
+		iface:        ifaceName,
+		coll:         coll,
+		link:         lnk,
+		rd:           rd,
+		buf:          bytes.Buffer{},
+		sysChan:      sysChan,
+		netChan:      netChan,
+		allowChan:    allowChan,
+		denyChan:     denyChan,
+		ipCountMap:   ipCountMap,
+		blocked:      blockedMap,
+		threshold:    defaultThreshold,
+		thresholdMap: thresholdMap,
 	}, nil
 }

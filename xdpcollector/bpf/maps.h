@@ -120,4 +120,24 @@ struct {
     __uint(value_size, sizeof(__u64));
 } ip_count_map SEC(".maps");
 
+/* =============================================================================
+ * Map: threshold_map
+ * -----------------------------------------------------------------------------
+ * Stores the rate limit threshold (in packets per second).
+ * Single entry, indexed by 0.
+ *
+ * Key:   __u32 (index = 0)
+ * Value: __u64 threshold (packets per second)
+ *
+ * Usage:
+ *   - Updated by user‐space on “set threshold <value>”.
+ * =============================================================================
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(__u64));
+} threshold_map SEC(".maps");
+
 #endif /* MAPS_H */

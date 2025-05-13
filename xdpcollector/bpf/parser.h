@@ -9,7 +9,8 @@
 #include <bpf/bpf_helpers.h>
 
 /**
- * parse_tcp - parse L2/L3/L4 headers and ensure packet is TCP over IPv4
+ * parse_xdp_tcp - parse L2/L3/L4 headers and ensure packet is TCP over IPv4
+ *
  * @ctx:   XDP context (contains data pointers)
  * @data_end: pointer to store packet end
  * @eth:   pointer to store Ethernet header pointer
@@ -18,9 +19,10 @@
  *
  * Returns true if packet is IPv4+TCP and all headers are within bounds.
  */
-static __always_inline bool parse_tcp(struct xdp_md *ctx, void **data_end,
-                                      struct ethhdr **eth, struct iphdr **ip,
-                                      struct tcphdr **tcp) {
+static __always_inline bool parse_xdp_tcp(struct xdp_md *ctx, void **data_end,
+                                          struct ethhdr **eth,
+                                          struct iphdr **ip,
+                                          struct tcphdr **tcp) {
     // Load packet bounds
     void *data = (void *)(long)ctx->data;
     *data_end = (void *)(long)ctx->data_end;

@@ -151,6 +151,12 @@ func (c *collector) Unblock(ip net.IP) error {
 // SetThreshold sets the rate limit threshold for the eBPF program.
 func (c *collector) SetThreshold(threshold uint64) {
 	old := atomic.SwapUint64(&c.threshold, threshold)
+	// Update the BPF map so xdp_prog can see the new value immediately
+	key := uint32(0)
+	if err := c.thresholdMap.Update(key, threshold, ebpf.UpdateAny); err != nil {
+		c.sysChan <- fmt.Sprintf("[xdp] error updating threshold map: %v", err)
+		return
+	}
 	c.sysChan <- fmt.Sprintf("[xdp] threshold changed from %d pkts/sec to %d pkts/sec", old, threshold)
 }
 
