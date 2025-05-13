@@ -27,6 +27,10 @@ type Collector interface {
 	Block(ip net.IP) error
 	// Unblock removes ip from the blocked_ips map.
 	Unblock(ip net.IP) error
+	// Protect scans listening ports for pid and updates the protected_ports BPF map.
+	Protect(pid int32) error
+	// Unprotect removes pid from the protected_ports BPF map.
+	Unprotect(pid int32) error
 	// SetThreshold sets the rate limit threshold (X pkts/sec).
 	SetThreshold(threshold uint64)
 
@@ -46,6 +50,7 @@ type collector struct {
 	denyChan     chan<- utility.TrafficStat // formatted denied traffic stats
 	ipCountMap   *ebpf.Map                  // per-CPU map for IP count
 	blocked      *ebpf.Map                  // blocklist map
+	protectedMap map[int32][]uint16         // map of protected ports (PID -> list of protected ports)
 	threshold    uint64                     // rate limit threshold (X pkts/sec)
 	thresholdMap *ebpf.Map                  // map for threshold (Value threshold passed to eBPF via this)
 }
@@ -136,8 +141,8 @@ func New(
 		return nil, fmt.Errorf("threshold_map not found")
 	}
 
-	// Default packet threshold (1,000 pkts/sec)
-	defaultThreshold := uint64(1000)
+	// Default packet threshold (25 pkts/sec)
+	defaultThreshold := uint64(25)
 	if err := thresholdMap.Update(uint32(0), defaultThreshold, ebpf.UpdateAny); err != nil {
 		lnk.Close()
 		coll.Close()
@@ -157,6 +162,7 @@ func New(
 		denyChan:     denyChan,
 		ipCountMap:   ipCountMap,
 		blocked:      blockedMap,
+		protectedMap: make(map[int32][]uint16),
 		threshold:    defaultThreshold,
 		thresholdMap: thresholdMap,
 	}, nil

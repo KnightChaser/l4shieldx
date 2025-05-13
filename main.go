@@ -59,6 +59,7 @@ func main() {
 		} else {
 			switch cmd.Op {
 			case utility.OpDeny:
+				// "deny" is followed by an IP address
 				err = coll.Block(cmd.IP)
 				msg := "[SYS] deny " + cmd.IP.String()
 				if err != nil {
@@ -67,6 +68,7 @@ func main() {
 				sysChan <- msg
 
 			case utility.OpAllow:
+				// "allow" is followed by an IP address
 				err = coll.Unblock(cmd.IP)
 				msg := "[SYS] allow " + cmd.IP.String()
 				if err != nil {
@@ -74,7 +76,26 @@ func main() {
 				}
 				sysChan <- msg
 
+			case utility.OpProtect:
+				// "protect" is followed by a PID
+				err = coll.Protect(cmd.PID)
+				msg := fmt.Sprintf("[SYS] protect %d", cmd.PID)
+				if err != nil {
+					msg += " failed: " + err.Error()
+				}
+				sysChan <- msg
+
+			case utility.OpUnprotect:
+				// "unprotect" is followed by a PID
+				err = coll.Unprotect(cmd.PID)
+				msg := fmt.Sprintf("[SYS] unprotect %d", cmd.PID)
+				if err != nil {
+					msg += " failed: " + err.Error()
+				}
+				sysChan <- msg
+
 			case utility.OpSetThreshold:
+				// "setThreshold" is followed by a number
 				coll.SetThreshold(cmd.Value)
 			}
 		}
