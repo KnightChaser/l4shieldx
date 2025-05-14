@@ -151,15 +151,115 @@ func (c *collector) Unblock(ip net.IP) error {
 // SetThreshold sets the rate limit threshold for the eBPF program.
 func (c *collector) SetThreshold(threshold uint64) {
 	old := atomic.SwapUint64(&c.threshold, threshold)
+	// Update the BPF map so xdp_prog can see the new value immediately
+	key := uint32(0)
+	if err := c.thresholdMap.Update(key, threshold, ebpf.UpdateAny); err != nil {
+		c.sysChan <- fmt.Sprintf("[xdp] error updating threshold map: %v", err)
+		return
+	}
 	c.sysChan <- fmt.Sprintf("[xdp] threshold changed from %d pkts/sec to %d pkts/sec", old, threshold)
+}
+
+// Protect adds all current listening ports of pid into the protected_ports BPF map.
+// It skips any ports already known to be protected for that PID.
+func (c *collector) Protect(pid int32) error {
+	c.protectedMapMutex.Lock()
+	defer c.protectedMapMutex.Unlock()
+
+	// Fetch all in-use ports for this PID
+	ports32, err := utility.GetPortsByPID(pid)
+	if err != nil {
+		return fmt.Errorf("failed to get ports for PID %d: %w", pid, err)
+	}
+	if len(ports32) == 0 {
+		return fmt.Errorf("no ports found for PID %d", pid)
+	}
+
+	bp := c.coll.Maps["protected_ports"]
+
+	// Ensure there’s an entry slice to append into
+	existing := c.protectedMap[pid]
+	for _, p32 := range ports32 {
+		port := uint16(p32)
+
+		// Dedupe against existing protected ports for this PID
+		already := false
+		for _, ep := range existing {
+			if ep == port {
+				already = true
+				break
+			}
+		}
+		if already {
+			c.sysChan <- fmt.Sprintf("[protect] PID %d port %d is already protected", pid, port)
+			continue
+		}
+
+		// Insert into BPF map (XDP side)
+		if err := bp.Update(port, uint8(1), ebpf.UpdateAny); err != nil {
+			return fmt.Errorf("failed to update protected_ports for port %d: %w", port, err)
+		}
+
+		// Record it in-memory and log
+		existing = append(existing, port)
+		c.sysChan <- fmt.Sprintf("[protect] PID %d port %d added to protection list", pid, port)
+	}
+
+	// Commit updated slice back to protectedMap
+	c.protectedMap[pid] = existing
+	return nil
+}
+
+// Unprotect removes the protected ports for pid from the BPF map.
+func (c *collector) Unprotect(pid int32) error {
+	// Ensure thread safety when accessing the protectedMap
+	c.protectedMapMutex.Lock()
+	defer c.protectedMapMutex.Unlock()
+
+	ports, ok := c.protectedMap[pid]
+	if !ok {
+		return fmt.Errorf("Unprotect: PID %d not protected yet", pid)
+	}
+
+	// Remove the ports from the protected_ports BPF map
+	bp := c.coll.Maps["protected_ports"]
+	for _, port := range ports {
+		if err := bp.Delete(port); err != nil {
+			return fmt.Errorf("Unprotect: failed to delete port %d: %w", port, err)
+		}
+	}
+
+	// Remove the PID from the protectedMap
+	delete(c.protectedMap, pid)
+	c.sysChan <- fmt.Sprintf("[unprotect] PID %d(port: %v) was removed from protection list", pid, ports)
+
+	// Remove the PID from the protectedMap
+	if _, ok := c.protectedMap[pid]; ok {
+		delete(c.protectedMap, pid)
+	}
+
+	return nil
+}
+
+// ShowProtected returns the list of protected ports for a given PID.
+func (c *collector) ShowProtected() map[int32][]uint16 {
+	return c.protectedMap
 }
 
 // flushIPCounts resets the per-IP counts in the eBPF map.
 func (c *collector) flushIPCounts(maxReqsPerSecond uint64) error {
+	// Check if the threshold is set in the eBPF map
+	// If not, use the Go-side threshold
+	var threshold uint64
+	if err := c.thresholdMap.Lookup(uint32(0), &threshold); err != nil {
+		// Fallback to the Go-side threshold if the map lookup fails
+		threshold = atomic.LoadUint64(&c.threshold)
+	}
+
 	mapIterator := c.ipCountMap.Iterate()
-	threshold := atomic.LoadUint64(&c.threshold)
 	var key uint32
 	var count uint64
+
 	for mapIterator.Next(&key, &count) {
 		if count > threshold {
 			ip := make(net.IP, 4)

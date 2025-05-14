@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"os/signal"
@@ -18,12 +17,9 @@ import (
 )
 
 func main() {
-	iface := flag.String("iface", "", "network interface to attach XDP program to")
-	flag.Parse()
-
-	if *iface == "" {
-		log.Fatal("Error: -iface flag is required")
-	}
+	// Select network interface
+	var iface string
+	iface = ui.SelectNetworkInterface()
 
 	// Create channels for communication
 	sysChan := make(chan string, 200)
@@ -42,12 +38,12 @@ func main() {
 	}
 
 	// Initialize XDP Collector
-	coll, err := xdpcollector.New(*iface, sysChan, netChan, allowChan, denyChan)
+	coll, err := xdpcollector.New(iface, sysChan, netChan, allowChan, denyChan)
 
 	if err != nil {
 		log.Fatalf("Collector initialization failed: %v", err)
 	}
-	log.Printf("Starting XDP collector on interface %s", *iface)
+	log.Printf("Starting XDP collector on interface %s", iface)
 
 	// Setup UI
 	app, layout, sysView, netView, allowedView, deniedView, input := ui.SetupUI(sysChan)
@@ -63,6 +59,7 @@ func main() {
 		} else {
 			switch cmd.Op {
 			case utility.OpDeny:
+				// "deny" is followed by an IP address
 				err = coll.Block(cmd.IP)
 				msg := "[SYS] deny " + cmd.IP.String()
 				if err != nil {
@@ -71,6 +68,7 @@ func main() {
 				sysChan <- msg
 
 			case utility.OpAllow:
+				// "allow" is followed by an IP address
 				err = coll.Unblock(cmd.IP)
 				msg := "[SYS] allow " + cmd.IP.String()
 				if err != nil {
@@ -78,7 +76,37 @@ func main() {
 				}
 				sysChan <- msg
 
+			case utility.OpProtect:
+				// "protect" is followed by a PID
+				err = coll.Protect(cmd.PID)
+				msg := fmt.Sprintf("[SYS] protect %d", cmd.PID)
+				if err != nil {
+					msg += " failed: " + err.Error()
+				}
+				sysChan <- msg
+
+			case utility.OpUnprotect:
+				// "unprotect" is followed by a PID
+				err = coll.Unprotect(cmd.PID)
+				msg := fmt.Sprintf("[SYS] unprotect %d", cmd.PID)
+				if err != nil {
+					msg += " failed: " + err.Error()
+				}
+				sysChan <- msg
+
+			case utility.OpShowProtected:
+				// "showProtected" displays the protected PID and their ports
+				protected := coll.ShowProtected()
+				if len(protected) == 0 {
+					sysChan <- "[SYS] No protected PIDs"
+				} else {
+					for pid, ports := range protected {
+						sysChan <- fmt.Sprintf("[SYS] PID %d -> %v", pid, ports)
+					}
+				}
+
 			case utility.OpSetThreshold:
+				// "setThreshold" is followed by a number
 				coll.SetThreshold(cmd.Value)
 			}
 		}

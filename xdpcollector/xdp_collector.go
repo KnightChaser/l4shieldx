@@ -8,6 +8,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"l4shieldx/xdpcollector/utility"
 
@@ -27,26 +28,35 @@ type Collector interface {
 	Block(ip net.IP) error
 	// Unblock removes ip from the blocked_ips map.
 	Unblock(ip net.IP) error
+	// Protect scans listening ports for pid and updates the protected_ports BPF map.
+	Protect(pid int32) error
+	// Unprotect removes pid from the protected_ports BPF map.
+	Unprotect(pid int32) error
 	// SetThreshold sets the rate limit threshold (X pkts/sec).
 	SetThreshold(threshold uint64)
+	// ShowProtectedPorts returns a map of PIDs and their protected ports.
+	ShowProtected() map[int32][]uint16
 
 	// Network stats returns: allowedPkts, allowedBytes, deniedPkts, deniedBytes.
 	Stats() (uint64, uint64, uint64, uint64, error)
 }
 
 type collector struct {
-	iface      string
-	coll       *ebpf.Collection
-	link       link.Link
-	rd         *ringbuf.Reader
-	buf        bytes.Buffer               // for binary.Read
-	sysChan    chan<- string              // formatted system messages
-	netChan    chan<- string              // formatted event strings
-	allowChan  chan<- utility.TrafficStat // formatted allowed traffic stats
-	denyChan   chan<- utility.TrafficStat // formatted denied traffic stats
-	ipCountMap *ebpf.Map                  // per-CPU map for IP count
-	blocked    *ebpf.Map                  // blocklist map
-	threshold  uint64                     // rate limit threshold (X pkts/sec)
+	iface             string
+	coll              *ebpf.Collection
+	link              link.Link
+	rd                *ringbuf.Reader
+	buf               bytes.Buffer               // for binary.Read
+	sysChan           chan<- string              // formatted system messages
+	netChan           chan<- string              // formatted event strings
+	allowChan         chan<- utility.TrafficStat // formatted allowed traffic stats
+	denyChan          chan<- utility.TrafficStat // formatted denied traffic stats
+	ipCountMap        *ebpf.Map                  // per-CPU map for IP count
+	blocked           *ebpf.Map                  // blocklist map
+	protectedMap      map[int32][]uint16         // map of protected ports (PID -> list of protected ports)
+	protectedMapMutex sync.Mutex                 // mutex for protectedMap
+	threshold         uint64                     // rate limit threshold (X pkts/sec)
+	thresholdMap      *ebpf.Map                  // map for threshold (Value threshold passed to eBPF via this)
 }
 
 // New loads the eBPF program (xdp_prog.o), attaches it to ifaceName,
@@ -92,7 +102,7 @@ func New(
 	}
 
 	// Attach XDP
-	prog := coll.Programs["xdp_tcp_hello"]
+	prog := coll.Programs["xdp_tcp_protect"]
 	lnk, err := link.AttachXDP(link.XDPOptions{
 		Program:   prog,
 		Interface: iface.Index,
@@ -127,22 +137,37 @@ func New(
 		return nil, fmt.Errorf("blocked_ips map not found")
 	}
 
-	// Default packet threshold (1,000 pkts/sec)
-	defaultThreshold := uint64(1000)
+	// Ensure threshold map exists
+	thresholdMap := coll.Maps["threshold_map"]
+	if thresholdMap == nil {
+		lnk.Close()
+		coll.Close()
+		return nil, fmt.Errorf("threshold_map not found")
+	}
+
+	// Default packet threshold (25 pkts/sec)
+	defaultThreshold := uint64(25)
+	if err := thresholdMap.Update(uint32(0), defaultThreshold, ebpf.UpdateAny); err != nil {
+		lnk.Close()
+		coll.Close()
+		return nil, fmt.Errorf("put threshold: %w", err)
+	}
 	sysChan <- fmt.Sprintf("[collector] default threshold set to %d pkts/sec", defaultThreshold)
 
 	return &collector{
-		iface:      ifaceName,
-		coll:       coll,
-		link:       lnk,
-		rd:         rd,
-		buf:        bytes.Buffer{},
-		sysChan:    sysChan,
-		netChan:    netChan,
-		allowChan:  allowChan,
-		denyChan:   denyChan,
-		ipCountMap: ipCountMap,
-		blocked:    blockedMap,
-		threshold:  defaultThreshold,
+		iface:        ifaceName,
+		coll:         coll,
+		link:         lnk,
+		rd:           rd,
+		buf:          bytes.Buffer{},
+		sysChan:      sysChan,
+		netChan:      netChan,
+		allowChan:    allowChan,
+		denyChan:     denyChan,
+		ipCountMap:   ipCountMap,
+		blocked:      blockedMap,
+		protectedMap: make(map[int32][]uint16),
+		threshold:    defaultThreshold,
+		thresholdMap: thresholdMap,
 	}, nil
 }
