@@ -161,54 +161,52 @@ func (c *collector) SetThreshold(threshold uint64) {
 }
 
 // Protect adds all current listening ports of pid into the protected_ports BPF map.
+// It skips any ports already known to be protected for that PID.
 func (c *collector) Protect(pid int32) error {
-	// Ensure thread safety when accessing the protectedMap
 	c.protectedMapMutex.Lock()
 	defer c.protectedMapMutex.Unlock()
 
-	// Check if the PID is valid
-	ports32, err := utility.GetPortsByPID(int32(pid))
+	// Fetch all in-use ports for this PID
+	ports32, err := utility.GetPortsByPID(pid)
 	if err != nil {
-		return fmt.Errorf("failed to get ports by PID: %w", err)
+		return fmt.Errorf("failed to get ports for PID %d: %w", pid, err)
 	}
 	if len(ports32) == 0 {
 		return fmt.Errorf("no ports found for PID %d", pid)
 	}
 
-	var ports16 []uint16
-	seen := make(map[uint16]struct{}, len(ports32))
-
-	// Check if the port is already in the list
-	// If so, skip it
 	bp := c.coll.Maps["protected_ports"]
-	for _, p := range ports32 {
-		port := uint16(p)
-		for _, existing := range c.protectedMap[pid] {
-			if port == existing {
-				c.sysChan <- fmt.Sprintf("[protect] PID %d(port: %v) already protected", pid, port)
-				continue
+
+	// Ensure there’s an entry slice to append into
+	existing := c.protectedMap[pid]
+	for _, p32 := range ports32 {
+		port := uint16(p32)
+
+		// Dedupe against existing protected ports for this PID
+		already := false
+		for _, ep := range existing {
+			if ep == port {
+				already = true
+				break
 			}
 		}
-
-		// Check if the port is already in the list
-		seen[port] = struct{}{}
-		ports16 = append(ports16, port)
-
-		// Insert into BPF map
-		var one = uint8(1)
-		if err := bp.Update(port, one, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("failed to update protected_ports map: %w", err)
+		if already {
+			c.sysChan <- fmt.Sprintf("[protect] PID %d port %d is already protected", pid, port)
+			continue
 		}
 
-		// Also add to the protectedMap
-		if _, ok := c.protectedMap[pid]; !ok {
-			c.protectedMap[pid] = []uint16{}
+		// Insert into BPF map (XDP side)
+		if err := bp.Update(port, uint8(1), ebpf.UpdateAny); err != nil {
+			return fmt.Errorf("failed to update protected_ports for port %d: %w", port, err)
 		}
-		c.protectedMap[pid] = append(c.protectedMap[pid], port)
 
-		c.sysChan <- fmt.Sprintf("[protect] PID %d(port: %v) was added to the protection list", pid, port)
+		// Record it in-memory and log
+		existing = append(existing, port)
+		c.sysChan <- fmt.Sprintf("[protect] PID %d port %d added to protection list", pid, port)
 	}
 
+	// Commit updated slice back to protectedMap
+	c.protectedMap[pid] = existing
 	return nil
 }
 
@@ -220,7 +218,7 @@ func (c *collector) Unprotect(pid int32) error {
 
 	ports, ok := c.protectedMap[pid]
 	if !ok {
-		return fmt.Errorf("Unprotect: PID %d not protected", pid)
+		return fmt.Errorf("Unprotect: PID %d not protected yet", pid)
 	}
 
 	// Remove the ports from the protected_ports BPF map
