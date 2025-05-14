@@ -52,14 +52,22 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
-    /* 2) Only protect configured ports */
+    /* 2) Check if the source is in the blocked list (early drop) */
+    __u32 saddr = ip->saddr;
+    __u8 *is_blocked = bpf_map_lookup_elem(&blocked_ips, &saddr);
+    if (is_blocked && *is_blocked) {
+        update_percpu_stats(ctx, data_end, TRAFFIC_DENIED);
+        return XDP_DROP;
+    }
+
+    /* 3) Only protect configured ports */
     __u16 dport = bpf_ntohs(tcp->dest);
     __u8 *is_port = bpf_map_lookup_elem(&protected_ports, &dport);
     if (!is_port) {
         return XDP_PASS;
     }
 
-    /* 3) Look up the threshold (XXX packets/sec (pps)) */
+    /* 4) Look up the threshold (XXX packets/sec (pps)) */
     __u64 packetThreshold = DEFAULT_PACKET_THRESHOLD;
     __u32 zero = 0;
     __u64 *pt = bpf_map_lookup_elem(&threshold_map, &zero);
@@ -70,8 +78,7 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
         bpf_printk("No threshold set, using default: %u\n", packetThreshold);
     }
 
-    /* 4) Rate-limit by source IP */
-    __u32 saddr = ip->saddr;
+    /* 5) Rate-limit by source IP */
     __u64 *packetCount = bpf_map_lookup_elem(&ip_count_map, &saddr);
     if (packetCount) {
         __u64 newCount = __sync_fetch_and_add(packetCount, 1) + 1;
@@ -92,7 +99,7 @@ int xdp_tcp_hello(struct xdp_md *ctx) {
     }
 
     /*
-     * 5) Update per-CPU stats and emit event
+     * 6) Update per-CPU stats and emit event
      *    If the packet reaches here, it means
      *    the packet is now allowed.
      */
