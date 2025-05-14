@@ -239,10 +239,18 @@ func (c *collector) ShowProtected() map[int32][]uint16 {
 
 // flushIPCounts resets the per-IP counts in the eBPF map.
 func (c *collector) flushIPCounts(maxReqsPerSecond uint64) error {
+	// Check if the threshold is set in the eBPF map
+	// If not, use the Go-side threshold
+	var threshold uint64
+	if err := c.thresholdMap.Lookup(uint32(0), &threshold); err != nil {
+		// Fallback to the Go-side threshold if the map lookup fails
+		threshold = atomic.LoadUint64(&c.threshold)
+	}
+
 	mapIterator := c.ipCountMap.Iterate()
-	threshold := atomic.LoadUint64(&c.threshold)
 	var key uint32
 	var count uint64
+
 	for mapIterator.Next(&key, &count) {
 		if count > threshold {
 			ip := make(net.IP, 4)
