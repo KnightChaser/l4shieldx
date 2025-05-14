@@ -41,7 +41,7 @@ static __always_inline void update_percpu_stats(struct xdp_md *ctx,
  *   4. Update per-CPU stats and emit event.
  */
 SEC("xdp")
-int xdp_tcp_hello(struct xdp_md *ctx) {
+int xdp_tcp_protect(struct xdp_md *ctx) {
     void *data_end;
     struct ethhdr *eth;
     struct iphdr *ip;

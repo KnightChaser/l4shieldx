@@ -102,7 +102,7 @@ func New(
 	}
 
 	// Attach XDP
-	prog := coll.Programs["xdp_tcp_hello"]
+	prog := coll.Programs["xdp_tcp_protect"]
 	lnk, err := link.AttachXDP(link.XDPOptions{
 		Program:   prog,
 		Interface: iface.Index,
