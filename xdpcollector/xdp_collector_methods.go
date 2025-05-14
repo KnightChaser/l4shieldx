@@ -162,6 +162,10 @@ func (c *collector) SetThreshold(threshold uint64) {
 
 // Protect adds all current listening ports of pid into the protected_ports BPF map.
 func (c *collector) Protect(pid int32) error {
+	// Ensure thread safety when accessing the protectedMap
+	c.protectedMapMutex.Lock()
+	defer c.protectedMapMutex.Unlock()
+
 	// Check if the PID is valid
 	ports32, err := utility.GetPortsByPID(int32(pid))
 	if err != nil {
@@ -174,13 +178,16 @@ func (c *collector) Protect(pid int32) error {
 	var ports16 []uint16
 	seen := make(map[uint16]struct{}, len(ports32))
 
+	// Check if the port is already in the list
+	// If so, skip it
 	bp := c.coll.Maps["protected_ports"]
 	for _, p := range ports32 {
-		// Check if the port is already in the list
-		// If so, skip it
 		port := uint16(p)
-		if _, ok := seen[port]; ok {
-			continue
+		for _, existing := range c.protectedMap[pid] {
+			if port == existing {
+				c.sysChan <- fmt.Sprintf("[protect] PID %d(port: %v) already protected", pid, port)
+				continue
+			}
 		}
 
 		// Check if the port is already in the list
@@ -207,6 +214,10 @@ func (c *collector) Protect(pid int32) error {
 
 // Unprotect removes the protected ports for pid from the BPF map.
 func (c *collector) Unprotect(pid int32) error {
+	// Ensure thread safety when accessing the protectedMap
+	c.protectedMapMutex.Lock()
+	defer c.protectedMapMutex.Unlock()
+
 	ports, ok := c.protectedMap[pid]
 	if !ok {
 		return fmt.Errorf("Unprotect: PID %d not protected", pid)

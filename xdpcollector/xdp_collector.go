@@ -8,6 +8,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"l4shieldx/xdpcollector/utility"
 
@@ -41,20 +42,21 @@ type Collector interface {
 }
 
 type collector struct {
-	iface        string
-	coll         *ebpf.Collection
-	link         link.Link
-	rd           *ringbuf.Reader
-	buf          bytes.Buffer               // for binary.Read
-	sysChan      chan<- string              // formatted system messages
-	netChan      chan<- string              // formatted event strings
-	allowChan    chan<- utility.TrafficStat // formatted allowed traffic stats
-	denyChan     chan<- utility.TrafficStat // formatted denied traffic stats
-	ipCountMap   *ebpf.Map                  // per-CPU map for IP count
-	blocked      *ebpf.Map                  // blocklist map
-	protectedMap map[int32][]uint16         // map of protected ports (PID -> list of protected ports)
-	threshold    uint64                     // rate limit threshold (X pkts/sec)
-	thresholdMap *ebpf.Map                  // map for threshold (Value threshold passed to eBPF via this)
+	iface             string
+	coll              *ebpf.Collection
+	link              link.Link
+	rd                *ringbuf.Reader
+	buf               bytes.Buffer               // for binary.Read
+	sysChan           chan<- string              // formatted system messages
+	netChan           chan<- string              // formatted event strings
+	allowChan         chan<- utility.TrafficStat // formatted allowed traffic stats
+	denyChan          chan<- utility.TrafficStat // formatted denied traffic stats
+	ipCountMap        *ebpf.Map                  // per-CPU map for IP count
+	blocked           *ebpf.Map                  // blocklist map
+	protectedMap      map[int32][]uint16         // map of protected ports (PID -> list of protected ports)
+	protectedMapMutex sync.Mutex                 // mutex for protectedMap
+	threshold         uint64                     // rate limit threshold (X pkts/sec)
+	thresholdMap      *ebpf.Map                  // map for threshold (Value threshold passed to eBPF via this)
 }
 
 // New loads the eBPF program (xdp_prog.o), attaches it to ifaceName,
