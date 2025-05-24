@@ -53,7 +53,7 @@ int xdp_tcp_protect(struct xdp_md *ctx) {
     }
 
     /* 2) Check if the source is in the blocked list (early drop) */
-    __u32 saddr = ip->saddr;
+    __u32 saddr = bpf_ntohl(ip->saddr);
     __u8 *is_blocked = bpf_map_lookup_elem(&blocked_ips, &saddr);
     if (is_blocked && *is_blocked) {
         update_percpu_stats(ctx, data_end, TRAFFIC_DENIED);
@@ -109,7 +109,7 @@ int xdp_tcp_protect(struct xdp_md *ctx) {
     struct event_t *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (event) {
         event->ts = bpf_ktime_get_ns();
-        event->saddr = saddr;
+        event->saddr = bpf_ntohl(ip->saddr);
         event->daddr = bpf_ntohl(ip->daddr);
         event->sport = bpf_ntohs(tcp->source);
         event->dport = bpf_ntohs(tcp->dest);
