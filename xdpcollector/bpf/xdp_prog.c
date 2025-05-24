@@ -109,7 +109,7 @@ int xdp_tcp_protect(struct xdp_md *ctx) {
     struct event_t *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (event) {
         event->ts = bpf_ktime_get_ns();
-        event->saddr = bpf_ntohl(saddr);
+        event->saddr = saddr;
         event->daddr = bpf_ntohl(ip->daddr);
         event->sport = bpf_ntohs(tcp->source);
         event->dport = bpf_ntohs(tcp->dest);
