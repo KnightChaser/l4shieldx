@@ -5,7 +5,7 @@ to test active TCP connections, with HTML output and root redirection.
 
 from typing import List
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from pydantic import BaseModel
 import psutil
 
@@ -91,3 +91,6 @@ def list_tcp_connections(request: Request) -> HTMLResponse:
 
     return HTMLResponse(content="\n".join(html), status_code=200)
 
+@app.get("/image")
+async def img():
+    return FileResponse("./nebula.jpg", media_type="image/jpeg")
